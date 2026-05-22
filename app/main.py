@@ -26,6 +26,7 @@ from AppKit import (
     NSScrollView,
     NSScreen,
     NSSecureTextField,
+    NSStatusBar,
     NSTextField,
     NSTextView,
     NSView,
@@ -85,6 +86,7 @@ class JustSayingApp(NSObject):
         self._reload_hotkeys_from_settings()
         self.buttons: list[NSButton] = []
         self.window = self._build_window()
+        self._install_status_item()
         self._install_hotkeys()
         self.tracker = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.25,
@@ -123,7 +125,13 @@ class JustSayingApp(NSObject):
         self._start_undo()
 
     def toggleCollapse_(self, sender) -> None:
-        self._set_collapsed(not self.collapsed)
+        self.hideFloatingWindow_(sender)
+
+    def hideFloatingWindow_(self, sender) -> None:
+        self._hide_floating_window()
+
+    def showFloatingWindow_(self, sender) -> None:
+        self._show_floating_window()
 
     def openSettings_(self, sender) -> None:
         self._show_settings_window()
@@ -333,7 +341,45 @@ class JustSayingApp(NSObject):
             self._set_button_title(self.undo_button, "撤", primary=False)
             self.undo_button.setEnabled_(bool(self.last_original))
         if hasattr(self, "collapse_button"):
-            self._set_button_title(self.collapse_button, "+" if self.collapsed else "-", primary=False)
+            self._set_button_title(self.collapse_button, "-", primary=False)
+
+    @objc.python_method
+    def _install_status_item(self) -> None:
+        length = _appkit_constant("NSVariableStatusItemLength", "NSVariableStatusItemLength")
+        self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(length)
+        button = self.status_item.button()
+        if button is not None:
+            button.setTitle_("JS")
+            button.setToolTip_("Just Saying")
+
+        menu = NSMenu.alloc().initWithTitle_("Just Saying")
+        for title, action in (
+            ("显示浮窗", "showFloatingWindow:"),
+            ("设置", "openSettings:"),
+        ):
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, "")
+            item.setTarget_(self)
+            menu.addItem_(item)
+
+        menu.addItem_(NSMenuItem.separatorItem())
+        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("退出", "terminate:", "q")
+        quit_item.setTarget_(NSApp)
+        menu.addItem_(quit_item)
+        self.status_item.setMenu_(menu)
+
+    @objc.python_method
+    def _hide_floating_window(self) -> None:
+        if hasattr(self, "window"):
+            self.window.orderOut_(self)
+
+    @objc.python_method
+    def _show_floating_window(self) -> None:
+        if not hasattr(self, "window"):
+            return
+        if self.collapsed:
+            self._set_collapsed(False)
+        self.window.orderFrontRegardless()
+        self._set_status(self._ready_status())
 
     @objc.python_method
     def _install_hotkeys(self) -> None:
@@ -665,7 +711,7 @@ class JustSayingApp(NSObject):
 
         self.collapse_button = self._button("-", "toggleCollapse:", 156, 8, 24)
         self._style_floating_button(self.collapse_button, primary=False)
-        self.collapse_button.setToolTip_("缩小 / 展开浮窗")
+        self.collapse_button.setToolTip_("隐藏浮窗，可从菜单栏 JS 恢复")
         self.chrome.addSubview_(self.collapse_button)
 
         self.buttons = [

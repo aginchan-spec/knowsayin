@@ -1,0 +1,9 @@
+{
+  "name": "Just Saying",
+  "short_name": "Just Saying",
+  "start_url": "/justsaying/",
+  "display": "standalone",
+  "background_color": "#f7f5ef",
+  "theme_color": "#f7f5ef",
+  "icons": []
+}

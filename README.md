@@ -12,7 +12,39 @@ cp .env.example .env
 python -m app.main
 ```
 
-启动后会出现一个很小的置顶毛玻璃浮窗，主按钮是 `优化`，旁边有 `撤`、`...` 和 `-`。
+启动后会出现一个很小的置顶毛玻璃浮窗，主按钮是 `优化`，旁边有 `撤`、`...` 和 `-`。菜单栏也会出现 `JS`，用于显示浮窗、打开设置或退出。
+
+## 手机网页
+
+手机网页用于给朋友免费试用：打开网页，输入或粘贴文字，点击 `优化`，再复制结果到别处。浏览器不会拿到 DeepSeek API key；网页只请求本机/服务器上的 `app.web`，由后端读取 `.env` 调用模型。
+
+本地运行：
+
+```bash
+python -m app.web --host 127.0.0.1 --port 8787
+```
+
+生成朋友专属链接配置：
+
+```bash
+python -m app.web --make-pass Anna --daily-limit 100 --max-chars 3000 --base-url https://mehelper.com/justsaying
+```
+
+把输出的 `JUSTSAYING_WEB_PASSES='...'` 放进服务器 `.env`。朋友使用输出的 `/p/<pass>` 链接打开后，浏览器会保存 pass，以后直接打开主页也能继续用。
+
+网页限额配置示例：
+
+```bash
+JUSTSAYING_WEB_SITE_URL=https://mehelper.com/justsaying
+JUSTSAYING_WEB_BASE_PATH=/justsaying
+JUSTSAYING_WEB_REQUIRE_PASS=true
+JUSTSAYING_WEB_DEFAULT_DAILY_LIMIT=100
+JUSTSAYING_WEB_DEFAULT_MAX_CHARS=3000
+JUSTSAYING_WEB_GLOBAL_DAILY_LIMIT=1000
+JUSTSAYING_WEB_PASSES=anna:随机口令:100:3000:true,ben:另一个随机口令:50:3000:true
+```
+
+使用记录只保存每日次数和字符数，不保存原文和优化结果。
 
 ## 模型设置
 
@@ -48,7 +80,7 @@ python -m app.main
 2. 如果想整理，点击 Just Saying 浮窗里的 `优化`，或按 `Option + Shift`。
 3. Just Saying 会切回你刚才使用的目标 App，优先用 macOS Accessibility 直接读取和替换当前文本；不支持时再退回 `Cmd+A/C/V`。
 4. 如果想撤回最近一次优化，点击 `撤`，或连续按三下 `Option`。
-5. 点击 `-` 可以把浮窗缩小，再点 `+` 展开。
+5. 点击 `-` 会完全隐藏浮窗；需要恢复时，从 macOS 菜单栏 `JS` 里点 `显示浮窗`。
 6. 确认没问题后，在原应用里正常提交。
 
 ## 配置

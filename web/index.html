@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="theme-color" content="#f7f5ef" />
+    <title>Just Saying</title>
+    <link rel="manifest" href="__BASE_PATH__/manifest.webmanifest" />
+    <link rel="stylesheet" href="__BASE_PATH__/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Just Saying</p>
+          <h1>提示词优化</h1>
+        </div>
+        <div class="quota" id="quota">今日剩余 -</div>
+      </header>
+
+      <section class="pass-panel" id="passPanel" hidden>
+        <label for="passInput">访问口令</label>
+        <div class="pass-row">
+          <input id="passInput" type="password" autocomplete="off" placeholder="输入朋友口令" />
+          <button id="savePassButton" type="button">保存</button>
+        </div>
+      </section>
+
+      <section class="editor">
+        <label for="sourceText">原文</label>
+        <textarea
+          id="sourceText"
+          autofocus
+          maxlength="3000"
+          placeholder="把语音转写、随手记录或粗糙想法粘贴在这里"
+        ></textarea>
+      </section>
+
+      <section class="editor result-editor">
+        <label for="resultText">结果</label>
+        <textarea id="resultText" readonly placeholder="优化后的 prompt 会出现在这里"></textarea>
+      </section>
+
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+    </main>
+
+    <footer class="action-bar">
+      <button id="optimizeButton" class="primary" type="button">优化</button>
+      <button id="copyButton" type="button" disabled>复制结果</button>
+    </footer>
+
+    <script>
+      window.JUSTSAYING_BASE_PATH = "__BASE_PATH__";
+    </script>
+    <script src="__BASE_PATH__/static/app.js"></script>
+  </body>
+</html>

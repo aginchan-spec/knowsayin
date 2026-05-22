@@ -13,3 +13,5 @@ __pycache__/
 *.log
 recordings/
 transcripts/private/
+.justsaying-web-usage.json
+.justsaying-web-usage.tmp
