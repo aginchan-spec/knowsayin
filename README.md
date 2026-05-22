@@ -22,6 +22,7 @@ GET  /v1/config
 POST /v1/session
 POST /v1/usage
 POST /v1/clean
+POST /v1/activate
 ```
 
 客户端不会携带 DeepSeek API key。DeepSeek key 只放在服务器环境变量里。
@@ -57,7 +58,7 @@ test -f .env || cp .env.example .env
 python -m app.main
 ```
 
-启动后会出现一个很小的置顶毛玻璃浮窗，只包含三个按钮：剩余额度、`Optimize` 和 `Undo`。`Optimize` 按钮为绿色表示云端已连线且 macOS 权限已授权；红色表示未连线或未授权。菜单栏也会出现 `KS`，用于显示浮窗、打开设置、检查更新、打开授权设置或退出。
+启动后会出现一个很小的置顶毛玻璃浮窗，只包含三个按钮：剩余额度、`Optimize` 和 `Undo`。`Optimize` 按钮为绿色表示云端已连线且 macOS 权限已授权；红色表示未连线或未授权。额度用完时，额度按钮会显示机器码，点击可复制；`Optimize` 会变成 `Website`，点击打开 KnowSayin 网站。菜单栏也会出现 `KS`，用于显示浮窗、打开设置、检查更新、打开授权设置或退出。
 
 打包成双击启动的 macOS App：
 
@@ -68,16 +69,27 @@ open "/Applications/KnowSayin.app"
 
 打包脚本固定使用 bundle id `com.knowsayin.app`。打包版读取 `~/Library/Application Support/KnowSayin/.env`；如果这个文件不存在，会从项目 `.env` 初始化一次。
 
+开发机如果没有配置 `KNOWSAYIN_CODESIGN_IDENTITY`，打包脚本会生成 ad-hoc signed app。ad-hoc 包每次重打后 macOS Accessibility 授权都可能失效；正式发给用户的更新包必须用同一个 Apple Developer ID Application 证书签名并 notarize：
+
+```bash
+KNOWSAYIN_CODESIGN_IDENTITY="Developer ID Application: Your Company (TEAMID)" \
+  scripts/build_macos_app.sh
+```
+
 ## 运行 VM101/API 中转服务
 
 在服务器环境文件中配置真实密钥，不要写入 repo：
 
 ```bash
 KNOWSAYIN_API_ALLOWED_ORIGINS=https://knowsayin.com
+KNOWSAYIN_API_QUOTA_CAPACITY=10
+KNOWSAYIN_API_QUOTA_REFILL_SECONDS=600
 KNOWSAYIN_API_TOKEN_SECRET=replace-with-random-server-secret
+KNOWSAYIN_API_ACTIVATION_SECRET=replace-with-random-activation-secret
 KNOWSAYIN_UPSTREAM_BASE_URL=https://api.deepseek.com/v1
 KNOWSAYIN_UPSTREAM_MODEL=deepseek-chat
 KNOWSAYIN_UPSTREAM_API_KEY=
+KNOWSAYIN_UPGRADE_URL=https://knowsayin.com
 ```
 
 本地或服务器启动：
@@ -111,11 +123,11 @@ python -m app.web --make-pass Anna --daily-limit 100 --max-chars 3000 --base-url
 点击浮窗里的额度按钮，或从 macOS 菜单栏 `KS -> Settings` 打开设置：
 
 1. 桌面版固定使用 `KnowSayin Cloud`，不支持用户填写自己的 API key、Base URL 或模型 ID。
-2. 设置窗口会显示当前 Cloud endpoint 和匿名剩余额度。
+2. 设置窗口会显示当前 Cloud endpoint 和匿名剩余额度。免费额度最多 10 个，用掉后每 10 分钟恢复 1 个。
 3. 按需要修改优化快捷键和还原快捷键。
 4. 点 `Save`。
 
-如果云服务不可用、额度耗尽或上游失败，桌面版不会用低质量 fallback 静默替换原文；它会显示错误并保留用户输入。
+如果云服务不可用、额度耗尽或上游失败，桌面版不会用低质量 fallback 静默替换原文；它会显示错误并保留用户输入。额度耗尽时，复制浮窗里的机器码，到网站付款/激活后继续使用。
 
 ## 使用流程
 

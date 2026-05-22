@@ -23,6 +23,8 @@ from AppKit import (
     NSMenu,
     NSMenuItem,
     NSPanel,
+    NSPasteboard,
+    NSPasteboardTypeString,
     NSScreen,
     NSStatusBar,
     NSTextField,
@@ -81,6 +83,10 @@ class JustSayingApp(NSObject):
         self.last_key_tap_attempt = 0.0
         self.quota_remaining: int | None = None
         self.quota_daily_limit: int | None = None
+        self.quota_refill_at = ""
+        self.machine_code = ""
+        self.upgrade_url = "https://knowsayin.com"
+        self.cloud_plan = "free"
         self.quota_refreshing = False
         self.cloud_available = False
         self._reload_hotkeys_from_settings()
@@ -136,6 +142,12 @@ class JustSayingApp(NSObject):
 
     def optimize_(self, sender) -> None:
         self._start_optimize()
+
+    def quotaButton_(self, sender) -> None:
+        if self._quota_exhausted():
+            self._copy_machine_code()
+        else:
+            self._show_settings_window()
 
     def undo_(self, sender) -> None:
         self._start_undo()
@@ -193,6 +205,9 @@ class JustSayingApp(NSObject):
     @objc.python_method
     def _start_optimize(self) -> None:
         if self.busy:
+            return
+        if self._quota_exhausted():
+            self._open_upgrade_page()
             return
         if not AXIsProcessTrusted():
             self._request_accessibility_permission(show_help=True)
@@ -305,10 +320,13 @@ class JustSayingApp(NSObject):
         if self.busy:
             return
         if hasattr(self, "optimize_button"):
-            self._set_button_title(self.optimize_button, "Optimize", primary=True)
+            title = "Website" if self._quota_exhausted() else "Optimize"
+            self._set_button_title(self.optimize_button, title, primary=True)
         if hasattr(self, "undo_button"):
             self._set_button_title(self.undo_button, "Undo", primary=False)
             self.undo_button.setEnabled_(bool(self.last_original))
+        if hasattr(self, "quota_button"):
+            self._refresh_quota_label()
         self._refresh_connection_indicator()
 
     @objc.python_method
@@ -430,6 +448,32 @@ class JustSayingApp(NSObject):
             alert.runModal()
         except Exception:
             pass
+
+    @objc.python_method
+    def _copy_machine_code(self) -> None:
+        if not self.machine_code:
+            return
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(self.machine_code, NSPasteboardTypeString)
+        self._set_status(f"Machine code copied: {self.machine_code}")
+        if hasattr(self, "quota_button"):
+            self._set_button_title(self.quota_button, "Copied", primary=False)
+        self._reset_title_later()
+
+    @objc.python_method
+    def _open_upgrade_page(self) -> None:
+        import subprocess
+        from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+        url = self.upgrade_url or "https://knowsayin.com"
+        if self.machine_code:
+            parsed = urlparse(url)
+            query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            query.setdefault("machine", self.machine_code)
+            url = urlunparse(parsed._replace(query=urlencode(query)))
+        subprocess.run(["open", url], check=False)
+        self._set_status("Opening KnowSayin website...")
 
     @objc.python_method
     def _install_hotkeys(self) -> None:
@@ -708,8 +752,13 @@ class JustSayingApp(NSObject):
         self.quota_refreshing = False
         self.cloud_available = True
         self.quota_remaining = _int_or_none(usage.get("remaining"))
-        self.quota_daily_limit = _int_or_none(usage.get("dailyLimit"))
+        self.quota_daily_limit = _int_or_none(usage.get("quotaLimit") or usage.get("dailyLimit"))
+        self.quota_refill_at = str(usage.get("refillAt") or usage.get("resetAt") or "")
+        self.machine_code = str(usage.get("deviceCode") or self.machine_code or "").strip().upper()
+        self.upgrade_url = str(usage.get("upgradeUrl") or self.upgrade_url or "https://knowsayin.com").strip()
+        self.cloud_plan = str(usage.get("plan") or self.cloud_plan or "free").strip().lower()
         self._refresh_quota_label()
+        self._reset_optimize_title()
         self._refresh_connection_indicator()
 
     @objc.python_method
@@ -718,6 +767,7 @@ class JustSayingApp(NSObject):
         self.cloud_available = False
         self.quota_remaining = None
         self.quota_daily_limit = None
+        self.quota_refill_at = ""
         self._refresh_quota_label(message)
         self._refresh_connection_indicator()
 
@@ -736,9 +786,15 @@ class JustSayingApp(NSObject):
         if not show_quota:
             return
 
-        if self.quota_remaining is not None and self.quota_daily_limit is not None:
+        if self._quota_exhausted():
+            text = self.machine_code
+            tooltip = f"Machine code: {self.machine_code}. Click to copy."
+        elif self.cloud_plan == "paid":
+            text = "Active"
+            tooltip = "KnowSayin is activated on this device."
+        elif self.quota_remaining is not None and self.quota_daily_limit is not None:
             text = f"{self.quota_remaining}/{self.quota_daily_limit}"
-            tooltip = f"Cloud quota remaining: {self.quota_remaining} of {self.quota_daily_limit} today"
+            tooltip = f"Cloud quota: {self.quota_remaining} of {self.quota_daily_limit}. Refills 1 every 10 minutes."
         elif self.quota_refreshing:
             text = "..."
             tooltip = "Loading cloud quota..."
@@ -754,10 +810,22 @@ class JustSayingApp(NSObject):
             self.optimize_button.setToolTip_(self._status_tooltip(getattr(self, "status_message", "")))
 
     @objc.python_method
+    def _quota_exhausted(self) -> bool:
+        return (
+            self.cloud_plan != "paid"
+            and self.quota_remaining is not None
+            and self.quota_remaining <= 0
+            and bool(self.machine_code)
+        )
+
+    @objc.python_method
     def _status_tooltip(self, message: str) -> str:
         cloud = "Connected" if self.cloud_available else "Offline or checking"
         permission = "Authorized" if self._has_required_permissions() else "Needs permission"
         parts = [message, cloud, permission, f"Hotkey: {self.optimize_hotkey.raw}"]
+        if self._quota_exhausted():
+            parts.append(f"Quota empty. Machine code: {self.machine_code}")
+            parts.append("Click Website to upgrade")
         if self.quota_remaining is not None and self.quota_daily_limit is not None:
             parts.append(f"Quota: {self.quota_remaining}/{self.quota_daily_limit}")
         return " | ".join(part for part in parts if part)
@@ -792,7 +860,7 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _build_window(self) -> NSPanel:
-        width = 208
+        width = 230
         height = 42
         screen = NSScreen.mainScreen().visibleFrame()
         x = screen.origin.x + screen.size.width - width - 24
@@ -845,17 +913,17 @@ class JustSayingApp(NSObject):
         self.chrome.layer().setMasksToBounds_(True)
         content.addSubview_(self.chrome)
 
-        self.quota_button = self._button("--/--", "openSettings:", 8, 6, 52)
+        self.quota_button = self._button("--/--", "quotaButton:", 8, 6, 70)
         self._style_floating_button(self.quota_button, primary=False)
         self.quota_button.setToolTip_("Cloud quota")
         self.chrome.addSubview_(self.quota_button)
 
-        self.optimize_button = self._button("Optimize", "optimize:", 66, 6, 84)
+        self.optimize_button = self._button("Optimize", "optimize:", 84, 6, 84)
         self._style_floating_button(self.optimize_button, primary=True)
         self.optimize_button.setToolTip_(self._status_tooltip(self._ready_status()))
         self.chrome.addSubview_(self.optimize_button)
 
-        self.undo_button = self._button("Undo", "undo:", 156, 6, 44)
+        self.undo_button = self._button("Undo", "undo:", 174, 6, 48)
         self._style_floating_button(self.undo_button, primary=False)
         self.undo_button.setToolTip_(f"Undo: {self.undo_hotkey.raw}")
         self.undo_button.setEnabled_(False)
@@ -921,7 +989,9 @@ class JustSayingApp(NSObject):
     def _refresh_connection_indicator(self) -> None:
         if not hasattr(self, "optimize_button"):
             return
-        if self._has_required_permissions() and self.cloud_available:
+        if self._quota_exhausted():
+            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.16, 0.43, 0.86, 0.96)
+        elif self._has_required_permissions() and self.cloud_available:
             color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.14, 0.64, 0.36, 0.96)
         else:
             color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.82, 0.18, 0.18, 0.96)
@@ -1029,8 +1099,12 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _quota_text(self) -> str:
+        if self._quota_exhausted():
+            return f"Machine code: {self.machine_code}"
+        if self.cloud_plan == "paid":
+            return "Activated"
         if self.quota_remaining is not None and self.quota_daily_limit is not None:
-            return f"{self.quota_remaining}/{self.quota_daily_limit} remaining today"
+            return f"{self.quota_remaining}/{self.quota_daily_limit} available; refills 1 every 10 minutes"
         if self.quota_refreshing:
             return "Loading..."
         return "Unavailable"
