@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import threading
 import time
+from dataclasses import dataclass
 
 import objc
 import pyperclip
+import Quartz
 from AppKit import (
     NSApp,
     NSApplication,
@@ -29,13 +31,16 @@ from AppKit import (
     NSView,
     NSVisualEffectView,
     NSWorkspace,
+    NSEvent,
 )
 from Foundation import NSAttributedString, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
 from .model_config import (
     ENV_PATH,
+    DEFAULT_OPTIMIZE_HOTKEY,
     DEFAULT_OPTIMIZE_PROMPT,
+    DEFAULT_UNDO_HOTKEY,
     get_active_model_config,
     list_remote_models,
     load_api_key,
@@ -49,6 +54,16 @@ from .optimizer import optimize_prompt
 from .paste import CapturedText, capture_focused_text, replace_captured_text
 
 
+@dataclass(frozen=True)
+class HotkeySpec:
+    raw: str
+    kind: str
+    modifiers: frozenset[str]
+    keycode: int | None = None
+    tap_modifier: str | None = None
+    tap_count: int = 0
+
+
 class JustSayingApp(NSObject):
     def applicationDidFinishLaunching_(self, notification) -> None:
         self.busy = False
@@ -58,8 +73,19 @@ class JustSayingApp(NSObject):
         self.target_name = None
         self.last_original: str | None = None
         self.last_capture: CapturedText | None = None
+        self.collapsed = False
+        self.hotkey_down: dict[str, bool] = {"optimize": False, "undo": False}
+        self.previous_modifier_flags = 0
+        self.tap_state: dict[str, tuple[int, float]] = {"optimize": (0, 0.0), "undo": (0, 0.0)}
+        self.hotkey_handlers = []
+        self.hotkey_monitors = []
+        self.key_event_tap = None
+        self.key_event_source = None
+        self.key_event_callback = None
+        self._reload_hotkeys_from_settings()
         self.buttons: list[NSButton] = []
         self.window = self._build_window()
+        self._install_hotkeys()
         self.tracker = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.25,
             self,
@@ -92,6 +118,12 @@ class JustSayingApp(NSObject):
 
     def optimize_(self, sender) -> None:
         self._start_optimize()
+
+    def undo_(self, sender) -> None:
+        self._start_undo()
+
+    def toggleCollapse_(self, sender) -> None:
+        self._set_collapsed(not self.collapsed)
 
     def openSettings_(self, sender) -> None:
         self._show_settings_window()
@@ -146,12 +178,23 @@ class JustSayingApp(NSObject):
         model = str(self.model_field.stringValue()).strip()
         api_key = str(self.api_key_field.stringValue()).strip()
         optimize_prompt_text = str(self.prompt_text_view.string()).strip()
+        optimize_hotkey = str(self.optimize_hotkey_field.stringValue()).strip()
+        undo_hotkey = str(self.undo_hotkey_field.stringValue()).strip()
 
         if not base_url:
             self.settings_status.setStringValue_("请填写 Base URL。")
             return
         if not model:
             self.settings_status.setStringValue_("请填写或选择模型。")
+            return
+        try:
+            optimize_spec = _parse_hotkey(optimize_hotkey or DEFAULT_OPTIMIZE_HOTKEY)
+            undo_spec = _parse_hotkey(undo_hotkey or DEFAULT_UNDO_HOTKEY)
+        except ValueError as exc:
+            self.settings_status.setStringValue_(f"快捷键格式错误：{exc}")
+            return
+        if _same_hotkey(optimize_spec, undo_spec):
+            self.settings_status.setStringValue_("优化和还原不能使用同一个快捷键。")
             return
 
         try:
@@ -161,11 +204,15 @@ class JustSayingApp(NSObject):
                 model,
                 api_key,
                 optimize_prompt_text or DEFAULT_OPTIMIZE_PROMPT,
+                optimize_hotkey or DEFAULT_OPTIMIZE_HOTKEY,
+                undo_hotkey or DEFAULT_UNDO_HOTKEY,
             )
         except Exception as exc:
             self.settings_status.setStringValue_(f"保存失败：{exc}")
             return
 
+        self._reload_hotkeys_from_settings()
+        self._update_hotkey_tooltips()
         self.settings_status.setStringValue_(f"已保存到 {ENV_PATH}。")
         self._set_status(self._ready_status())
         self.settings_window.orderOut_(self)
@@ -182,6 +229,22 @@ class JustSayingApp(NSObject):
         self._set_busy(True)
         self._set_button_title(self.optimize_button, "...", primary=True)
         threading.Thread(target=self._optimize_worker, daemon=True).start()
+
+    @objc.python_method
+    def _start_undo(self) -> None:
+        if self.busy:
+            return
+        if not self.last_original or self.last_capture is None:
+            self._set_status("没有可撤销的优化。")
+            if hasattr(self, "undo_button"):
+                self._set_button_title(self.undo_button, "无", primary=False)
+                self._reset_title_later()
+            return
+
+        self._set_status("正在恢复上一次优化前的文本...")
+        self._set_busy(True)
+        self._set_button_title(self.undo_button, "...", primary=False)
+        threading.Thread(target=self._restore_worker, daemon=True).start()
 
     @objc.python_method
     def _optimize_worker(self) -> None:
@@ -213,7 +276,7 @@ class JustSayingApp(NSObject):
             if self.last_capture is None:
                 raise RuntimeError("没有可恢复的原文。")
             replace_captured_text(self.last_capture, self.last_original or "")
-            AppHelper.callAfter(self._finish, "已恢复原文。")
+            AppHelper.callAfter(self._finish_undo, "已恢复原文。")
         except Exception as exc:
             AppHelper.callAfter(self._fail, str(exc))
 
@@ -222,6 +285,15 @@ class JustSayingApp(NSObject):
         self._set_status(message)
         self._set_busy(False)
         self._set_button_title(self.optimize_button, "完成", primary=True)
+        self._reset_title_later()
+
+    @objc.python_method
+    def _finish_undo(self, message: str) -> None:
+        self.last_original = None
+        self.last_capture = None
+        self._set_status(message)
+        self._set_busy(False)
+        self._set_button_title(self.undo_button, "OK", primary=False)
         self._reset_title_later()
 
     @objc.python_method
@@ -236,12 +308,14 @@ class JustSayingApp(NSObject):
         self.busy = busy
         for button in self.buttons:
             button.setEnabled_(not busy)
+        if hasattr(self, "undo_button"):
+            self.undo_button.setEnabled_((not busy) and bool(self.last_original))
 
     @objc.python_method
     def _set_status(self, message: str) -> None:
         self.status_message = message
         if hasattr(self, "optimize_button"):
-            self.optimize_button.setToolTip_(message)
+            self.optimize_button.setToolTip_(f"{message} | 快捷键：{self.optimize_hotkey.raw}")
         if hasattr(self, "status_dot"):
             self._refresh_status_dot()
 
@@ -251,8 +325,215 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _reset_optimize_title(self) -> None:
-        if not self.busy and hasattr(self, "optimize_button"):
+        if self.busy:
+            return
+        if hasattr(self, "optimize_button"):
             self._set_button_title(self.optimize_button, "优化", primary=True)
+        if hasattr(self, "undo_button"):
+            self._set_button_title(self.undo_button, "撤", primary=False)
+            self.undo_button.setEnabled_(bool(self.last_original))
+        if hasattr(self, "collapse_button"):
+            self._set_button_title(self.collapse_button, "+" if self.collapsed else "-", primary=False)
+
+    @objc.python_method
+    def _install_hotkeys(self) -> None:
+        mask = _appkit_constant("NSEventMaskFlagsChanged", "NSFlagsChangedMask")
+
+        def global_handler(event) -> None:
+            self._handle_flags_changed(event)
+
+        def local_handler(event):
+            self._handle_flags_changed(event)
+            return event
+
+        self.hotkey_handlers = [global_handler, local_handler]
+        self.hotkey_monitors = [
+            NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(mask, global_handler),
+            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(mask, local_handler),
+        ]
+        self._install_key_event_tap()
+
+    @objc.python_method
+    def _reload_hotkeys_from_settings(self) -> None:
+        data = load_model_settings()
+        try:
+            self.optimize_hotkey = _parse_hotkey(data.get("optimize_hotkey") or DEFAULT_OPTIMIZE_HOTKEY)
+        except ValueError:
+            self.optimize_hotkey = _parse_hotkey(DEFAULT_OPTIMIZE_HOTKEY)
+        try:
+            self.undo_hotkey = _parse_hotkey(data.get("undo_hotkey") or DEFAULT_UNDO_HOTKEY)
+        except ValueError:
+            self.undo_hotkey = _parse_hotkey(DEFAULT_UNDO_HOTKEY)
+        self.hotkey_down = {"optimize": False, "undo": False}
+        self.tap_state = {"optimize": (0, 0.0), "undo": (0, 0.0)}
+
+    @objc.python_method
+    def _update_hotkey_tooltips(self) -> None:
+        if hasattr(self, "optimize_button"):
+            self.optimize_button.setToolTip_(
+                self._ready_status() + f" | 快捷键：{self.optimize_hotkey.raw}",
+            )
+        if hasattr(self, "undo_button"):
+            self.undo_button.setToolTip_(f"Undo：{self.undo_hotkey.raw}")
+
+    @objc.python_method
+    def _install_key_event_tap(self) -> None:
+        event_mask = 1 << Quartz.kCGEventKeyDown
+
+        def key_event_callback(proxy, event_type, event, refcon):
+            if event_type in (
+                Quartz.kCGEventTapDisabledByTimeout,
+                Quartz.kCGEventTapDisabledByUserInput,
+            ):
+                if self.key_event_tap is not None:
+                    Quartz.CGEventTapEnable(self.key_event_tap, True)
+                return event
+
+            action = self._key_hotkey_action(event_type, event)
+            if action == "optimize":
+                AppHelper.callAfter(self._start_optimize)
+                return None
+            if action == "undo":
+                AppHelper.callAfter(self._start_undo)
+                return None
+
+            return event
+
+        self.key_event_callback = key_event_callback
+        self.key_event_tap = Quartz.CGEventTapCreate(
+            Quartz.kCGHIDEventTap,
+            Quartz.kCGHeadInsertEventTap,
+            Quartz.kCGEventTapOptionDefault,
+            event_mask,
+            self.key_event_callback,
+            None,
+        )
+        if self.key_event_tap is None:
+            self._set_status("无法启用全局快捷键。请检查 Accessibility / Input Monitoring 权限。")
+            return
+
+        self.key_event_source = Quartz.CFMachPortCreateRunLoopSource(
+            None,
+            self.key_event_tap,
+            0,
+        )
+        Quartz.CFRunLoopAddSource(
+            Quartz.CFRunLoopGetCurrent(),
+            self.key_event_source,
+            Quartz.kCFRunLoopCommonModes,
+        )
+        Quartz.CGEventTapEnable(self.key_event_tap, True)
+
+    @objc.python_method
+    def _key_hotkey_action(self, event_type, event) -> str | None:
+        if event_type != Quartz.kCGEventKeyDown:
+            return None
+        for action, hotkey in (
+            ("optimize", self.optimize_hotkey),
+            ("undo", self.undo_hotkey),
+        ):
+            if hotkey.kind == "key" and self._matches_key_hotkey(event, hotkey):
+                return action
+        return None
+
+    @objc.python_method
+    def _matches_key_hotkey(self, event, hotkey: HotkeySpec) -> bool:
+        keycode = Quartz.CGEventGetIntegerValueField(
+            event,
+            Quartz.kCGKeyboardEventKeycode,
+        )
+        if hotkey.keycode is None or keycode != hotkey.keycode:
+            return False
+
+        flags = int(Quartz.CGEventGetFlags(event))
+        active = _active_modifier_names(flags, quartz=True)
+        return active == hotkey.modifiers
+
+    @objc.python_method
+    def _handle_flags_changed(self, event) -> None:
+        flags = int(event.modifierFlags())
+        for action, hotkey in (
+            ("optimize", self.optimize_hotkey),
+            ("undo", self.undo_hotkey),
+        ):
+            if hotkey.kind == "modifier":
+                self._handle_modifier_combo(action, hotkey, flags)
+            elif hotkey.kind == "tap":
+                self._handle_tap_hotkey(action, hotkey, flags)
+        self.previous_modifier_flags = flags
+
+    @objc.python_method
+    def _handle_modifier_combo(self, action: str, hotkey: HotkeySpec, flags: int) -> None:
+        active = _active_modifier_names(flags, quartz=False) == hotkey.modifiers
+        if active and not self.hotkey_down.get(action, False):
+            self.hotkey_down[action] = True
+            AppHelper.callAfter(self._run_hotkey_action, action)
+        elif not active:
+            self.hotkey_down[action] = False
+
+    @objc.python_method
+    def _handle_tap_hotkey(self, action: str, hotkey: HotkeySpec, flags: int) -> None:
+        if hotkey.tap_modifier is None:
+            return
+        mask = _modifier_mask(hotkey.tap_modifier, quartz=False)
+        active_modifiers = _active_modifier_names(flags, quartz=False)
+        was_down = bool(self.previous_modifier_flags & mask)
+        is_down = bool(flags & mask)
+        if not is_down or was_down or active_modifiers != frozenset({hotkey.tap_modifier}):
+            return
+
+        now = time.monotonic()
+        count, last_time = self.tap_state.get(action, (0, 0.0))
+        count = count + 1 if now - last_time <= 0.55 else 1
+        if count >= hotkey.tap_count:
+            self.tap_state[action] = (0, 0.0)
+            AppHelper.callAfter(self._run_hotkey_action, action)
+            return
+        self.tap_state[action] = (count, now)
+
+    @objc.python_method
+    def _run_hotkey_action(self, action: str) -> None:
+        if action == "optimize":
+            self._start_optimize()
+        elif action == "undo":
+            self._start_undo()
+
+    @objc.python_method
+    def _set_collapsed(self, collapsed: bool) -> None:
+        if not hasattr(self, "window") or not hasattr(self, "chrome"):
+            return
+        if self.collapsed == collapsed:
+            return
+
+        self.collapsed = collapsed
+        width = 54 if collapsed else 188
+        height = 38 if collapsed else 48
+        frame = self.window.frame()
+        right = frame.origin.x + frame.size.width
+        top = frame.origin.y + frame.size.height
+        new_frame = NSMakeRect(right - width, top - height, width, height)
+        self.window.setFrame_display_animate_(new_frame, True, True)
+        self.chrome.setFrame_(NSMakeRect(0, 0, width, height))
+        self.chrome.layer().setCornerRadius_(height / 2)
+
+        self.optimize_button.setHidden_(collapsed)
+        self.undo_button.setHidden_(collapsed)
+        self.settings_button.setHidden_(collapsed)
+
+        if collapsed:
+            self.status_dot.setFrame_(NSMakeRect(11, 16, 7, 7))
+            self.collapse_button.setFrame_(NSMakeRect(23, 4, 24, 30))
+            self._set_button_title(self.collapse_button, "+", primary=False)
+            self.collapse_button.setToolTip_("展开浮窗")
+            return
+
+        self.status_dot.setFrame_(NSMakeRect(13, 21, 7, 7))
+        self.optimize_button.setFrame_(NSMakeRect(24, 8, 72, 30))
+        self.undo_button.setFrame_(NSMakeRect(100, 8, 24, 30))
+        self.settings_button.setFrame_(NSMakeRect(128, 8, 24, 30))
+        self.collapse_button.setFrame_(NSMakeRect(156, 8, 24, 30))
+        self._set_button_title(self.collapse_button, "-", primary=False)
+        self.collapse_button.setToolTip_("缩小浮窗")
 
     @objc.python_method
     def _find_models_worker(self, base_url: str, api_key: str) -> None:
@@ -307,7 +588,7 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _build_window(self) -> NSPanel:
-        width = 132
+        width = 188
         height = 48
         screen = NSScreen.mainScreen().visibleFrame()
         x = screen.origin.x + screen.size.width - width - 24
@@ -342,41 +623,57 @@ class JustSayingApp(NSObject):
         content.setWantsLayer_(True)
         content.layer().setBackgroundColor_(NSColor.clearColor().CGColor())
 
-        chrome = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, width, height))
-        chrome.setMaterial_(
+        self.chrome = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, width, height))
+        self.chrome.setMaterial_(
             _appkit_constant("NSVisualEffectMaterialHUDWindow", "NSVisualEffectMaterialPopover"),
         )
-        chrome.setBlendingMode_(
+        self.chrome.setBlendingMode_(
             _appkit_constant(
                 "NSVisualEffectBlendingModeBehindWindow",
                 "NSVisualEffectBlendingModeBehindWindow",
             ),
         )
-        chrome.setState_(
+        self.chrome.setState_(
             _appkit_constant("NSVisualEffectStateActive", "NSVisualEffectStateActive"),
         )
-        chrome.setWantsLayer_(True)
-        chrome.layer().setCornerRadius_(24)
-        chrome.layer().setMasksToBounds_(True)
-        content.addSubview_(chrome)
+        self.chrome.setWantsLayer_(True)
+        self.chrome.layer().setCornerRadius_(24)
+        self.chrome.layer().setMasksToBounds_(True)
+        content.addSubview_(self.chrome)
 
         self.status_dot = NSView.alloc().initWithFrame_(NSMakeRect(13, 21, 7, 7))
         self.status_dot.setWantsLayer_(True)
         self.status_dot.layer().setCornerRadius_(3.5)
         self._refresh_status_dot()
-        chrome.addSubview_(self.status_dot)
+        self.chrome.addSubview_(self.status_dot)
 
         self.optimize_button = self._button("优化", "optimize:", 24, 8, 72)
         self._style_floating_button(self.optimize_button, primary=True)
-        self.optimize_button.setToolTip_(self._ready_status())
-        chrome.addSubview_(self.optimize_button)
+        self.optimize_button.setToolTip_(self._ready_status() + f" | 快捷键：{self.optimize_hotkey.raw}")
+        self.chrome.addSubview_(self.optimize_button)
 
-        self.settings_button = self._button("...", "openSettings:", 100, 8, 24)
+        self.undo_button = self._button("撤", "undo:", 100, 8, 24)
+        self._style_floating_button(self.undo_button, primary=False)
+        self.undo_button.setToolTip_(f"Undo：{self.undo_hotkey.raw}")
+        self.undo_button.setEnabled_(False)
+        self.chrome.addSubview_(self.undo_button)
+
+        self.settings_button = self._button("...", "openSettings:", 128, 8, 24)
         self._style_floating_button(self.settings_button, primary=False)
         self.settings_button.setToolTip_("设置 API、模型和优化提示词")
-        chrome.addSubview_(self.settings_button)
+        self.chrome.addSubview_(self.settings_button)
 
-        self.buttons = [self.optimize_button, self.settings_button]
+        self.collapse_button = self._button("-", "toggleCollapse:", 156, 8, 24)
+        self._style_floating_button(self.collapse_button, primary=False)
+        self.collapse_button.setToolTip_("缩小 / 展开浮窗")
+        self.chrome.addSubview_(self.collapse_button)
+
+        self.buttons = [
+            self.optimize_button,
+            self.undo_button,
+            self.settings_button,
+            self.collapse_button,
+        ]
         self.status_message = self._ready_status()
 
         return window
@@ -442,7 +739,7 @@ class JustSayingApp(NSObject):
 
         self.settings_busy = False
         width = 560
-        height = 560
+        height = 650
         screen = NSScreen.mainScreen().visibleFrame()
         x = screen.origin.x + screen.size.width - width - 48
         y = screen.origin.y + screen.size.height - height - 70
@@ -466,9 +763,9 @@ class JustSayingApp(NSObject):
         content.setWantsLayer_(True)
         content.layer().setBackgroundColor_(NSColor.windowBackgroundColor().CGColor())
 
-        self._label(content, "Provider", 20, 500, 100, 18)
+        self._label(content, "Provider", 20, 590, 100, 18)
         self.provider_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(132, 494, 388, 28),
+            NSMakeRect(132, 584, 388, 28),
             False,
         )
         self.provider_popup.addItemsWithTitles_(provider_names())
@@ -476,48 +773,64 @@ class JustSayingApp(NSObject):
         self.provider_popup.setAction_("settingsProviderChanged:")
         content.addSubview_(self.provider_popup)
 
-        self._label(content, "API Key", 20, 460, 100, 18)
+        self._label(content, "API Key", 20, 550, 100, 18)
         self.api_key_field = NSSecureTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 454, 300, 26),
+            NSMakeRect(132, 544, 300, 26),
         )
         self.api_key_field.setPlaceholderString_("保存后写入本地 .env")
         content.addSubview_(self.api_key_field)
 
-        paste_key_button = self._button("粘贴", "pasteApiKey:", 442, 452, 78)
+        paste_key_button = self._button("粘贴", "pasteApiKey:", 442, 542, 78)
         content.addSubview_(paste_key_button)
 
-        self._label(content, "Base URL", 20, 420, 100, 18)
+        self._label(content, "Base URL", 20, 510, 100, 18)
         self.base_url_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 414, 388, 26),
+            NSMakeRect(132, 504, 388, 26),
         )
         content.addSubview_(self.base_url_field)
 
-        self._label(content, "模型", 20, 380, 100, 18)
-        self.model_field = NSTextField.alloc().initWithFrame_(NSMakeRect(132, 374, 388, 26))
+        self._label(content, "模型", 20, 470, 100, 18)
+        self.model_field = NSTextField.alloc().initWithFrame_(NSMakeRect(132, 464, 388, 26))
         content.addSubview_(self.model_field)
 
-        self._label(content, "搜索结果", 20, 340, 100, 18)
+        self._label(content, "搜索结果", 20, 430, 100, 18)
         self.model_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(132, 334, 388, 28),
+            NSMakeRect(132, 424, 388, 28),
             False,
         )
         self.model_popup.setTarget_(self)
         self.model_popup.setAction_("settingsModelChanged:")
         content.addSubview_(self.model_popup)
 
-        self._label(content, "优化提示词", 20, 300, 100, 18)
-        prompt_scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(132, 110, 388, 202))
+        self._label(content, "优化快捷键", 20, 390, 100, 18)
+        self.optimize_hotkey_field = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(132, 384, 170, 26),
+        )
+        self.optimize_hotkey_field.setPlaceholderString_(DEFAULT_OPTIMIZE_HOTKEY)
+        content.addSubview_(self.optimize_hotkey_field)
+        self._label(content, "例：option+shift / option+space", 314, 389, 220, 18)
+
+        self._label(content, "还原快捷键", 20, 354, 100, 18)
+        self.undo_hotkey_field = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(132, 348, 170, 26),
+        )
+        self.undo_hotkey_field.setPlaceholderString_(DEFAULT_UNDO_HOTKEY)
+        content.addSubview_(self.undo_hotkey_field)
+        self._label(content, "例：option*3 / command+z", 314, 353, 220, 18)
+
+        self._label(content, "优化提示词", 20, 312, 100, 18)
+        prompt_scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(132, 112, 388, 190))
         prompt_scroll.setHasVerticalScroller_(True)
         prompt_scroll.setBorderType_(_appkit_constant("NSBezelBorder", "NSBezelBorder"))
-        self.prompt_text_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 388, 202))
+        self.prompt_text_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 388, 190))
         self.prompt_text_view.setFont_(NSFont.systemFontOfSize_(13))
         self.prompt_text_view.setString_(DEFAULT_OPTIMIZE_PROMPT)
         prompt_scroll.setDocumentView_(self.prompt_text_view)
         content.addSubview_(prompt_scroll)
 
-        self.find_models_button = self._button("寻找模型", "findModels:", 132, 64, 110)
-        self.save_settings_button = self._button("保存", "saveSettings:", 252, 64, 90)
-        cancel_button = self._button("取消", "cancelSettings:", 352, 64, 90)
+        self.find_models_button = self._button("寻找模型", "findModels:", 132, 66, 110)
+        self.save_settings_button = self._button("保存", "saveSettings:", 252, 66, 90)
+        cancel_button = self._button("取消", "cancelSettings:", 352, 66, 90)
         content.addSubview_(self.find_models_button)
         content.addSubview_(self.save_settings_button)
         content.addSubview_(cancel_button)
@@ -541,6 +854,8 @@ class JustSayingApp(NSObject):
         self.base_url_field.setStringValue_(data["base_url"] or provider.base_url)
         self.model_field.setStringValue_(data["model"] or provider.default_model)
         self.api_key_field.setStringValue_(data["api_key"] or "")
+        self.optimize_hotkey_field.setStringValue_(data["optimize_hotkey"] or DEFAULT_OPTIMIZE_HOTKEY)
+        self.undo_hotkey_field.setStringValue_(data["undo_hotkey"] or DEFAULT_UNDO_HOTKEY)
         self.prompt_text_view.setString_(data["optimize_prompt"] or DEFAULT_OPTIMIZE_PROMPT)
         self.model_popup.removeAllItems()
         self.settings_status.setStringValue_(f"设置会保存到 {ENV_PATH}。")
@@ -552,6 +867,181 @@ class JustSayingApp(NSObject):
         label.setFont_(NSFont.systemFontOfSize_(12))
         label.setTextColor_(NSColor.secondaryLabelColor())
         content.addSubview_(label)
+
+
+KEY_CODES: dict[str, int] = {
+    "space": 49,
+    "return": 36,
+    "enter": 36,
+    "tab": 48,
+    "escape": 53,
+    "esc": 53,
+    "left": 123,
+    "right": 124,
+    "down": 125,
+    "up": 126,
+    "delete": 51,
+    "backspace": 51,
+    "a": 0,
+    "s": 1,
+    "d": 2,
+    "f": 3,
+    "h": 4,
+    "g": 5,
+    "z": 6,
+    "x": 7,
+    "c": 8,
+    "v": 9,
+    "b": 11,
+    "q": 12,
+    "w": 13,
+    "e": 14,
+    "r": 15,
+    "y": 16,
+    "t": 17,
+    "1": 18,
+    "2": 19,
+    "3": 20,
+    "4": 21,
+    "6": 22,
+    "5": 23,
+    "=": 24,
+    "9": 25,
+    "7": 26,
+    "-": 27,
+    "8": 28,
+    "0": 29,
+    "o": 31,
+    "u": 32,
+    "i": 34,
+    "p": 35,
+    "l": 37,
+    "j": 38,
+    "k": 40,
+    "n": 45,
+    "m": 46,
+}
+
+MODIFIER_ALIASES = {
+    "option": "option",
+    "opt": "option",
+    "alt": "option",
+    "alternate": "option",
+    "⌥": "option",
+    "shift": "shift",
+    "⇧": "shift",
+    "command": "command",
+    "cmd": "command",
+    "⌘": "command",
+    "control": "control",
+    "ctrl": "control",
+    "ctl": "control",
+    "⌃": "control",
+}
+
+
+def _parse_hotkey(value: str) -> HotkeySpec:
+    raw = value.strip()
+    normalized = _normalize_hotkey_text(raw)
+    if not normalized:
+        raise ValueError("快捷键不能为空。")
+
+    tap = _parse_tap_hotkey(raw, normalized)
+    if tap:
+        return tap
+
+    parts = [part for part in normalized.split("+") if part]
+    if not parts:
+        raise ValueError(f"无法识别 `{raw}`。")
+
+    modifiers: list[str] = []
+    key: str | None = None
+    for part in parts:
+        modifier = MODIFIER_ALIASES.get(part)
+        if modifier:
+            modifiers.append(modifier)
+            continue
+        key = part
+
+    if not modifiers:
+        raise ValueError("至少需要一个修饰键，比如 option 或 shift。")
+
+    modifier_set = frozenset(modifiers)
+    if key is None:
+        return HotkeySpec(raw=raw, kind="modifier", modifiers=modifier_set)
+
+    keycode = KEY_CODES.get(key)
+    if keycode is None:
+        raise ValueError(f"暂不支持按键 `{key}`。")
+    return HotkeySpec(raw=raw, kind="key", modifiers=modifier_set, keycode=keycode)
+
+
+def _same_hotkey(first: HotkeySpec, second: HotkeySpec) -> bool:
+    return (
+        first.kind == second.kind
+        and first.modifiers == second.modifiers
+        and first.keycode == second.keycode
+        and first.tap_modifier == second.tap_modifier
+        and first.tap_count == second.tap_count
+    )
+
+
+def _parse_tap_hotkey(raw: str, normalized: str) -> HotkeySpec | None:
+    compact = normalized.replace("+", "").replace(" ", "")
+    compact = compact.replace("三下", "x3").replace("三次", "x3")
+    compact = compact.replace("triple", "x3").replace("times", "x")
+    for alias, modifier in MODIFIER_ALIASES.items():
+        if compact in {f"{alias}x3", f"{alias}*3", f"3x{alias}", f"x3{alias}"}:
+            return HotkeySpec(
+                raw=raw,
+                kind="tap",
+                modifiers=frozenset(),
+                tap_modifier=modifier,
+                tap_count=3,
+            )
+    return None
+
+
+def _normalize_hotkey_text(value: str) -> str:
+    text = value.strip().lower()
+    replacements = {
+        "＋": "+",
+        "加": "+",
+        " ": "",
+        "\t": "",
+        "×": "x",
+        "＊": "*",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+
+def _active_modifier_names(flags: int, quartz: bool) -> frozenset[str]:
+    return frozenset(
+        name
+        for name in ("option", "shift", "command", "control")
+        if flags & _modifier_mask(name, quartz)
+    )
+
+
+def _modifier_mask(name: str, quartz: bool) -> int:
+    if quartz:
+        masks = {
+            "option": int(Quartz.kCGEventFlagMaskAlternate),
+            "shift": int(Quartz.kCGEventFlagMaskShift),
+            "command": int(Quartz.kCGEventFlagMaskCommand),
+            "control": int(Quartz.kCGEventFlagMaskControl),
+        }
+        return masks[name]
+
+    masks = {
+        "option": _appkit_constant("NSEventModifierFlagOption", "NSAlternateKeyMask"),
+        "shift": _appkit_constant("NSEventModifierFlagShift", "NSShiftKeyMask"),
+        "command": _appkit_constant("NSEventModifierFlagCommand", "NSCommandKeyMask"),
+        "control": _appkit_constant("NSEventModifierFlagControl", "NSControlKeyMask"),
+    }
+    return masks[name]
 
 
 def _appkit_constant(primary: str, fallback: str) -> int:

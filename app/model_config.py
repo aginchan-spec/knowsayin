@@ -12,6 +12,8 @@ from .config import PROJECT_ROOT
 
 
 ENV_PATH = PROJECT_ROOT / ".env"
+DEFAULT_OPTIMIZE_HOTKEY = "option+shift"
+DEFAULT_UNDO_HOTKEY = "option*3"
 
 DEFAULT_OPTIMIZE_PROMPT = """你是一个语音提示词清洗助手。
 
@@ -98,6 +100,8 @@ def load_model_settings() -> dict[str, str]:
         "optimize_prompt": _decode_env_text(
             values.get("JUSTSAYING_OPTIMIZE_PROMPT") or DEFAULT_OPTIMIZE_PROMPT,
         ),
+        "optimize_hotkey": values.get("JUSTSAYING_OPTIMIZE_HOTKEY") or DEFAULT_OPTIMIZE_HOTKEY,
+        "undo_hotkey": values.get("JUSTSAYING_UNDO_HOTKEY") or DEFAULT_UNDO_HOTKEY,
     }
 
 
@@ -107,6 +111,8 @@ def save_model_settings(
     model: str,
     api_key: str,
     optimize_prompt: str,
+    optimize_hotkey: str = DEFAULT_OPTIMIZE_HOTKEY,
+    undo_hotkey: str = DEFAULT_UNDO_HOTKEY,
 ) -> None:
     _ensure_env_file()
     _set_env("JUSTSAYING_PROVIDER", provider_id)
@@ -117,6 +123,8 @@ def save_model_settings(
         "JUSTSAYING_OPTIMIZE_PROMPT",
         _encode_env_text(optimize_prompt.strip() or DEFAULT_OPTIMIZE_PROMPT),
     )
+    _set_env("JUSTSAYING_OPTIMIZE_HOTKEY", optimize_hotkey.strip() or DEFAULT_OPTIMIZE_HOTKEY)
+    _set_env("JUSTSAYING_UNDO_HOTKEY", undo_hotkey.strip() or DEFAULT_UNDO_HOTKEY)
     os.chmod(ENV_PATH, 0o600)
 
 
@@ -199,6 +207,8 @@ def _read_env() -> dict[str, str]:
         "OPENAI_BASE_URL",
         "OPENAI_MODEL",
         "JUSTSAYING_OPTIMIZE_PROMPT",
+        "JUSTSAYING_OPTIMIZE_HOTKEY",
+        "JUSTSAYING_UNDO_HOTKEY",
         "JUSTSAYING_DISABLE_LLM",
     ):
         if os.getenv(key):
