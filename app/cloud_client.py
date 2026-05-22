@@ -142,7 +142,7 @@ def _cloud_error_message(code: str, status: int) -> str:
         "EMPTY_TEXT": "Enter text to optimize.",
         "TEXT_TOO_LONG": "This text is too long for one request.",
         "DAILY_LIMIT": "Today's free quota is used up.",
-        "QUOTA_EMPTY": "Free quota is empty. Upgrade or wait for it to refill.",
+        "QUOTA_EMPTY": "Free quota is empty. Click Get extra or wait for it to refill.",
         "RATE_LIMITED": "Too many requests. Please try again shortly.",
         "GLOBAL_LIMIT": "Today's shared cloud quota is used up.",
         "UPSTREAM_FAILED": "Cloud optimization failed. Please try again later.",

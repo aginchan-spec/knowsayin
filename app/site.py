@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hmac
 import json
 import mimetypes
 import os
@@ -12,13 +11,25 @@ from pathlib import Path
 from typing import Any
 from urllib import request
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse
 
 from .config import PROJECT_ROOT
 
 
 SITE_ROOT = PROJECT_ROOT / "site"
 MAX_BODY_BYTES = 32 * 1024
+COMPLIMENT_OPTIONS = [
+    {"id": "taste", "label": "你很有品味"},
+    {"id": "kind", "label": "你很好人"},
+    {"id": "lucky", "label": "好人一生平安"},
+    {"id": "handsome", "label": "这个工具做得有点帅"},
+    {"id": "tokens", "label": "谢谢你帮我省 token"},
+    {"id": "button", "label": "这个按钮值得被点击"},
+    {"id": "thoughtful", "label": "你想得真周到"},
+    {"id": "prompt", "label": "愿你的 prompt 永远清楚"},
+    {"id": "useful", "label": "KnowSayin 有点东西"},
+    {"id": "coffee", "label": "请收下一杯精神咖啡"},
+]
 
 
 @dataclass(frozen=True)
@@ -28,9 +39,7 @@ class SiteSettings:
     internal_api_base_url: str
     download_url: str
     github_url: str
-    checkout_url: str
-    admin_token: str
-    activation_secret: str
+    grant_secret: str
 
 
 def main() -> None:
@@ -76,11 +85,17 @@ class KnowSayinSiteHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlparse(self.path).path
 
-        if path == "/api/checkout":
-            self._handle_checkout()
+        if path == "/api/session":
+            self._handle_cloud_proxy("/v1/session", require_auth=False)
             return
-        if path == "/api/admin/activate":
-            self._handle_admin_activate()
+        if path == "/api/usage":
+            self._handle_cloud_proxy("/v1/usage", require_auth=True)
+            return
+        if path == "/api/clean":
+            self._handle_cloud_proxy("/v1/clean", require_auth=True)
+            return
+        if path == "/api/extra":
+            self._handle_extra()
             return
 
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -97,11 +112,28 @@ class KnowSayinSiteHandler(BaseHTTPRequestHandler):
                 "apiBaseUrl": settings.api_base_url,
                 "downloadUrl": settings.download_url,
                 "githubUrl": settings.github_url,
-                "checkoutEnabled": bool(settings.checkout_url),
+                "extraEnabled": bool(settings.grant_secret),
+                "compliments": COMPLIMENT_OPTIONS,
             }
         )
 
-    def _handle_checkout(self) -> None:
+    def _handle_cloud_proxy(self, internal_path: str, require_auth: bool) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            return
+
+        headers = {}
+        if require_auth:
+            token = _bearer_token(self.headers.get("Authorization", ""))
+            if not token:
+                self._send_json({"error": "BAD_TOKEN", "message": "Session token is required."}, HTTPStatus.UNAUTHORIZED)
+                return
+            headers["Authorization"] = f"Bearer {token}"
+
+        response, status = _post_internal_json(internal_path, payload, _load_settings(), headers=headers)
+        self._send_json(response, status)
+
+    def _handle_extra(self) -> None:
         payload = self._read_json_body()
         if payload is None:
             return
@@ -111,46 +143,42 @@ class KnowSayinSiteHandler(BaseHTTPRequestHandler):
             self._send_json(
                 {
                     "error": "BAD_DEVICE_CODE",
-                    "message": "Enter the machine code shown in the KnowSayin app.",
+                    "message": "Open this page from the KnowSayin app so your machine code is included.",
+                },
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        compliment_id = str(payload.get("compliment") or "").strip()
+        valid_ids = {option["id"] for option in COMPLIMENT_OPTIONS}
+        if compliment_id not in valid_ids:
+            self._send_json(
+                {
+                    "error": "BAD_COMPLIMENT",
+                    "message": "Pick one nice thing before getting extra quota.",
                 },
                 HTTPStatus.BAD_REQUEST,
             )
             return
 
         settings = _load_settings()
-        if not settings.checkout_url:
+        if not settings.grant_secret:
             self._send_json(
                 {
-                    "error": "CHECKOUT_NOT_CONFIGURED",
-                    "message": "Online checkout is being connected. Copy your machine code for manual activation.",
+                    "error": "EXTRA_NOT_CONFIGURED",
+                    "message": "Extra quota is not configured yet.",
                     "deviceCode": device_code,
                 },
                 HTTPStatus.SERVICE_UNAVAILABLE,
             )
             return
 
-        self._send_json({"checkoutUrl": _url_with_machine(settings.checkout_url, device_code)})
-
-    def _handle_admin_activate(self) -> None:
-        payload = self._read_json_body()
-        if payload is None:
-            return
-
-        settings = _load_settings()
-        submitted_token = _bearer_token(self.headers.get("Authorization", ""))
-        if not settings.admin_token or not _constant_time_equal(submitted_token, settings.admin_token):
-            self._send_json({"error": "UNAUTHORIZED"}, HTTPStatus.UNAUTHORIZED)
-            return
-        if not settings.activation_secret:
-            self._send_json({"error": "ACTIVATION_DISABLED"}, HTTPStatus.SERVICE_UNAVAILABLE)
-            return
-
-        device_code = _normalize_device_code(str(payload.get("deviceCode") or ""))
-        if not device_code:
-            self._send_json({"error": "BAD_DEVICE_CODE"}, HTTPStatus.BAD_REQUEST)
-            return
-
-        response, status = _activate_device_code(device_code, settings)
+        response, status = _post_internal_json(
+            "/v1/grant",
+            {"deviceCode": device_code, "compliment": compliment_id},
+            settings,
+            headers={"Authorization": f"Bearer {settings.grant_secret}"},
+        )
         self._send_json(response, status)
 
     def _read_json_body(self) -> dict[str, Any] | None:
@@ -244,9 +272,7 @@ def _load_settings() -> SiteSettings:
         internal_api_base_url=os.getenv("KNOWSAYIN_INTERNAL_API_BASE_URL", "http://127.0.0.1:8788").strip(),
         download_url=download_url,
         github_url=github_url,
-        checkout_url=os.getenv("KNOWSAYIN_SITE_CHECKOUT_URL", "").strip(),
-        admin_token=os.getenv("KNOWSAYIN_SITE_ADMIN_TOKEN", "").strip(),
-        activation_secret=os.getenv("KNOWSAYIN_API_ACTIVATION_SECRET", "").strip(),
+        grant_secret=os.getenv("KNOWSAYIN_API_GRANT_SECRET", "").strip(),
     )
 
 
@@ -260,47 +286,46 @@ def _is_self_download_url(download_url: str, public_url: str) -> bool:
     )
 
 
-def _activate_device_code(device_code: str, settings: SiteSettings) -> tuple[dict[str, Any], HTTPStatus]:
-    url = f"{settings.internal_api_base_url.rstrip('/')}/v1/activate"
-    body = json.dumps({"deviceCode": device_code}, ensure_ascii=False).encode("utf-8")
-    activation_request = request.Request(
+def _post_internal_json(
+    internal_path: str,
+    payload: dict[str, Any],
+    settings: SiteSettings,
+    headers: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], HTTPStatus]:
+    url = f"{settings.internal_api_base_url.rstrip('/')}/{internal_path.lstrip('/')}"
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request_headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        **(headers or {}),
+    }
+    internal_request = request.Request(
         url,
         data=body,
         method="POST",
-        headers={
-            "Authorization": f"Bearer {settings.activation_secret}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
+        headers=request_headers,
     )
 
     try:
-        with request.urlopen(activation_request, timeout=8) as response:
+        with request.urlopen(internal_request, timeout=30) as response:
             response_body = response.read().decode("utf-8")
             return _parse_json_response(response_body), HTTPStatus(response.status)
     except HTTPError as error:
         return _parse_json_response(error.read().decode("utf-8")), HTTPStatus(error.code)
     except URLError:
-        return {"error": "ACTIVATION_UPSTREAM_UNAVAILABLE"}, HTTPStatus.SERVICE_UNAVAILABLE
+        return {"error": "INTERNAL_API_UNAVAILABLE"}, HTTPStatus.SERVICE_UNAVAILABLE
 
 
 def _parse_json_response(value: str) -> dict[str, Any]:
     try:
         payload = json.loads(value)
     except Exception:
-        return {"error": "BAD_ACTIVATION_RESPONSE"}
-    return payload if isinstance(payload, dict) else {"error": "BAD_ACTIVATION_RESPONSE"}
+        return {"error": "BAD_INTERNAL_RESPONSE"}
+    return payload if isinstance(payload, dict) else {"error": "BAD_INTERNAL_RESPONSE"}
 
 
 def _normalize_device_code(value: str) -> str:
     return "".join(ch for ch in value.upper() if ch.isalnum())[:16]
-
-
-def _url_with_machine(url: str, device_code: str) -> str:
-    parsed = urlparse(url)
-    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    query["machine"] = device_code
-    return urlunparse(parsed._replace(query=urlencode(query)))
 
 
 def _bearer_token(header: str) -> str:
@@ -308,10 +333,6 @@ def _bearer_token(header: str) -> str:
     if not header.startswith(prefix):
         return ""
     return header[len(prefix) :].strip()
-
-
-def _constant_time_equal(left: str, right: str) -> bool:
-    return hmac.compare_digest(left, right)
 
 
 if __name__ == "__main__":

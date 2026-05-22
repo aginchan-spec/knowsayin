@@ -22,7 +22,7 @@ GET  /v1/config
 POST /v1/session
 POST /v1/usage
 POST /v1/clean
-POST /v1/activate
+POST /v1/grant
 ```
 
 客户端不会携带 DeepSeek API key。DeepSeek key 只放在服务器环境变量里。
@@ -58,7 +58,7 @@ test -f .env || cp .env.example .env
 python -m app.main
 ```
 
-启动后会出现一个很小的置顶毛玻璃浮窗，只包含三个按钮：剩余额度、`Optimize` 和 `Undo`。`Optimize` 按钮为绿色表示云端已连线且 macOS 权限已授权；红色表示未连线或未授权。额度用完时，额度按钮会显示机器码，点击可复制；`Optimize` 会变成 `Website`，点击打开 KnowSayin 网站。菜单栏也会出现 `KS`，用于显示浮窗、打开设置、检查更新、打开授权设置或退出。
+启动后会出现一个很小的置顶毛玻璃浮窗：左侧是额度、隐藏和 `Undo`，右侧是 `Optimize`。`Optimize` 按钮为绿色表示云端已连线且 macOS 权限已授权；红色表示未连线或未授权。免费额度用完时，`Optimize` 会变成 `Get extra`，点击打开 KnowSayin 网站并自动带上本机机器码。隐藏后可从菜单栏 `KS -> Show Floating Window` 恢复。
 
 打包成双击启动的 macOS App：
 
@@ -82,14 +82,14 @@ KNOWSAYIN_CODESIGN_IDENTITY="Developer ID Application: Your Company (TEAMID)" \
 
 ```bash
 KNOWSAYIN_API_ALLOWED_ORIGINS=https://knowsayin.com
-KNOWSAYIN_API_QUOTA_CAPACITY=10
-KNOWSAYIN_API_QUOTA_REFILL_SECONDS=600
+KNOWSAYIN_API_QUOTA_CAPACITY=20
+KNOWSAYIN_API_QUOTA_REFILL_SECONDS=300
 KNOWSAYIN_API_TOKEN_SECRET=replace-with-random-server-secret
-KNOWSAYIN_API_ACTIVATION_SECRET=replace-with-random-activation-secret
+KNOWSAYIN_API_GRANT_SECRET=replace-with-random-grant-secret
 KNOWSAYIN_UPSTREAM_BASE_URL=https://api.deepseek.com/v1
 KNOWSAYIN_UPSTREAM_MODEL=deepseek-chat
 KNOWSAYIN_UPSTREAM_API_KEY=
-KNOWSAYIN_UPGRADE_URL=https://knowsayin.com
+KNOWSAYIN_EXTRA_URL=https://knowsayin.com
 ```
 
 本地或服务器启动：
@@ -102,7 +102,7 @@ python -m app.cloud_api --host 127.0.0.1 --port 8788
 
 ## 运行根网站
 
-根网站服务用于 `https://knowsayin.com` 和 `https://www.knowsayin.com`。它和朋友测试用的手机网页是两个入口：根网站负责下载、升级和机器码激活入口；手机网页负责粘贴文本后优化。
+根网站服务用于 `https://knowsayin.com` 和 `https://www.knowsayin.com`。首页就是可用的 prompt cleaner：可以直接粘贴文本优化，也可以承接桌面端 `Get extra` 跳转，用户选一句固定的赞美后免费补满额度。
 
 本地启动：
 
@@ -117,8 +117,7 @@ KNOWSAYIN_SITE_PUBLIC_URL=https://knowsayin.com
 KNOWSAYIN_SITE_API_BASE_URL=https://api.knowsayin.com
 KNOWSAYIN_INTERNAL_API_BASE_URL=http://127.0.0.1:8788
 KNOWSAYIN_SITE_DOWNLOAD_URL=https://github.com/aginchan-spec/knowsayin
-KNOWSAYIN_SITE_CHECKOUT_URL=
-KNOWSAYIN_SITE_ADMIN_TOKEN=
+KNOWSAYIN_API_GRANT_SECRET=replace-with-random-grant-secret
 ```
 
 生产建议由独立 user service 运行：
@@ -135,7 +134,7 @@ www.knowsayin.com -> http://127.0.0.1:8789
 api.knowsayin.com -> http://127.0.0.1:8788
 ```
 
-`POST /api/admin/activate` 只给受信任的服务端流程或临时人工激活使用，必须带 `KNOWSAYIN_SITE_ADMIN_TOKEN`，并由网站服务在服务端读取 `KNOWSAYIN_API_ACTIVATION_SECRET` 后调用内部 `/v1/activate`。浏览器 JavaScript、桌面客户端和公开网页都不能拿到 activation secret。
+`POST /api/extra` 是公开网页入口，只接收机器码和固定赞美选项。网站服务会在服务端读取 `KNOWSAYIN_API_GRANT_SECRET`，再调用内部 `/v1/grant` 补满对应机器码的免费额度。浏览器 JavaScript、桌面客户端和公开网页都不能拿到 grant secret。
 
 ## 手机网页
 
@@ -160,11 +159,11 @@ python -m app.web --make-pass Anna --daily-limit 100 --max-chars 3000 --base-url
 点击浮窗里的额度按钮，或从 macOS 菜单栏 `KS -> Settings` 打开设置：
 
 1. 桌面版固定使用 `KnowSayin Cloud`，不支持用户填写自己的 API key、Base URL 或模型 ID。
-2. 设置窗口会显示当前 Cloud endpoint 和匿名剩余额度。免费额度最多 10 个，用掉后每 10 分钟恢复 1 个。
+2. 设置窗口会显示当前 Cloud endpoint 和匿名剩余额度。免费额度最多 20 个，用掉后每 5 分钟恢复 1 个。
 3. 按需要修改优化快捷键和还原快捷键。
 4. 点 `Save`。
 
-如果云服务不可用、额度耗尽或上游失败，桌面版不会用低质量 fallback 静默替换原文；它会显示错误并保留用户输入。额度耗尽时，复制浮窗里的机器码，到网站付款/激活后继续使用。
+如果云服务不可用、额度耗尽或上游失败，桌面版不会用低质量 fallback 静默替换原文；它会显示错误并保留用户输入。额度耗尽时，点击 `Get extra` 打开网站，选一句好话后免费补满额度。
 
 ## 使用流程
 

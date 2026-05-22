@@ -85,7 +85,7 @@ class JustSayingApp(NSObject):
         self.quota_daily_limit: int | None = None
         self.quota_refill_at = ""
         self.machine_code = ""
-        self.upgrade_url = "https://knowsayin.com"
+        self.extra_url = "https://knowsayin.com"
         self.cloud_plan = "free"
         self.quota_refreshing = False
         self.cloud_available = False
@@ -144,10 +144,7 @@ class JustSayingApp(NSObject):
         self._start_optimize()
 
     def quotaButton_(self, sender) -> None:
-        if self._quota_exhausted():
-            self._copy_machine_code()
-        else:
-            self._show_settings_window()
+        self._show_settings_window()
 
     def undo_(self, sender) -> None:
         self._start_undo()
@@ -207,7 +204,7 @@ class JustSayingApp(NSObject):
         if self.busy:
             return
         if self._quota_exhausted():
-            self._open_upgrade_page()
+            self._open_extra_page()
             return
         if not AXIsProcessTrusted():
             self._request_accessibility_permission(show_help=True)
@@ -300,6 +297,8 @@ class JustSayingApp(NSObject):
             button.setEnabled_(not busy)
         if hasattr(self, "quota_button"):
             self.quota_button.setEnabled_(True)
+        if hasattr(self, "hide_button"):
+            self.hide_button.setEnabled_(True)
         if hasattr(self, "undo_button"):
             self.undo_button.setEnabled_((not busy) and bool(self.last_original))
         self._refresh_connection_indicator()
@@ -320,7 +319,7 @@ class JustSayingApp(NSObject):
         if self.busy:
             return
         if hasattr(self, "optimize_button"):
-            title = "Website" if self._quota_exhausted() else "Optimize"
+            title = "Get extra" if self._quota_exhausted() else "Optimize"
             self._set_button_title(self.optimize_button, title, primary=True)
         if hasattr(self, "undo_button"):
             self._set_button_title(self.undo_button, "Undo", primary=False)
@@ -462,11 +461,11 @@ class JustSayingApp(NSObject):
         self._reset_title_later()
 
     @objc.python_method
-    def _open_upgrade_page(self) -> None:
+    def _open_extra_page(self) -> None:
         import subprocess
         from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-        url = self.upgrade_url or "https://knowsayin.com"
+        url = self.extra_url or "https://knowsayin.com"
         if self.machine_code:
             parsed = urlparse(url)
             query = dict(parse_qsl(parsed.query, keep_blank_values=True))
@@ -755,7 +754,7 @@ class JustSayingApp(NSObject):
         self.quota_daily_limit = _int_or_none(usage.get("quotaLimit") or usage.get("dailyLimit"))
         self.quota_refill_at = str(usage.get("refillAt") or usage.get("resetAt") or "")
         self.machine_code = str(usage.get("deviceCode") or self.machine_code or "").strip().upper()
-        self.upgrade_url = str(usage.get("upgradeUrl") or self.upgrade_url or "https://knowsayin.com").strip()
+        self.extra_url = str(usage.get("extraUrl") or self.extra_url or "https://knowsayin.com").strip()
         self.cloud_plan = str(usage.get("plan") or self.cloud_plan or "free").strip().lower()
         self._refresh_quota_label()
         self._reset_optimize_title()
@@ -787,14 +786,11 @@ class JustSayingApp(NSObject):
             return
 
         if self._quota_exhausted():
-            text = self.machine_code
-            tooltip = f"Machine code: {self.machine_code}. Click to copy."
-        elif self.cloud_plan == "paid":
-            text = "Active"
-            tooltip = "KnowSayin is activated on this device."
+            text = f"0/{self.quota_daily_limit or 20}"
+            tooltip = f"Quota is empty. Click Get extra for a free refill. Machine code: {self.machine_code}."
         elif self.quota_remaining is not None and self.quota_daily_limit is not None:
             text = f"{self.quota_remaining}/{self.quota_daily_limit}"
-            tooltip = f"Cloud quota: {self.quota_remaining} of {self.quota_daily_limit}. Refills 1 every 10 minutes."
+            tooltip = f"Cloud quota: {self.quota_remaining} of {self.quota_daily_limit}. Refills 1 every 5 minutes."
         elif self.quota_refreshing:
             text = "..."
             tooltip = "Loading cloud quota..."
@@ -812,8 +808,7 @@ class JustSayingApp(NSObject):
     @objc.python_method
     def _quota_exhausted(self) -> bool:
         return (
-            self.cloud_plan != "paid"
-            and self.quota_remaining is not None
+            self.quota_remaining is not None
             and self.quota_remaining <= 0
             and bool(self.machine_code)
         )
@@ -825,7 +820,7 @@ class JustSayingApp(NSObject):
         parts = [message, cloud, permission, f"Hotkey: {self.optimize_hotkey.raw}"]
         if self._quota_exhausted():
             parts.append(f"Quota empty. Machine code: {self.machine_code}")
-            parts.append("Click Website to upgrade")
+            parts.append("Click Get extra for a free refill")
         if self.quota_remaining is not None and self.quota_daily_limit is not None:
             parts.append(f"Quota: {self.quota_remaining}/{self.quota_daily_limit}")
         return " | ".join(part for part in parts if part)
@@ -860,7 +855,7 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _build_window(self) -> NSPanel:
-        width = 230
+        width = 264
         height = 42
         screen = NSScreen.mainScreen().visibleFrame()
         x = screen.origin.x + screen.size.width - width - 24
@@ -913,24 +908,30 @@ class JustSayingApp(NSObject):
         self.chrome.layer().setMasksToBounds_(True)
         content.addSubview_(self.chrome)
 
-        self.quota_button = self._button("--/--", "quotaButton:", 8, 6, 70)
+        self.quota_button = self._button("--/--", "quotaButton:", 8, 6, 62)
         self._style_floating_button(self.quota_button, primary=False)
         self.quota_button.setToolTip_("Cloud quota")
         self.chrome.addSubview_(self.quota_button)
 
-        self.optimize_button = self._button("Optimize", "optimize:", 84, 6, 84)
-        self._style_floating_button(self.optimize_button, primary=True)
-        self.optimize_button.setToolTip_(self._status_tooltip(self._ready_status()))
-        self.chrome.addSubview_(self.optimize_button)
+        self.hide_button = self._button("-", "hideFloatingWindow:", 76, 6, 28)
+        self._style_floating_button(self.hide_button, primary=False)
+        self.hide_button.setToolTip_("Hide floating window")
+        self.chrome.addSubview_(self.hide_button)
 
-        self.undo_button = self._button("Undo", "undo:", 174, 6, 48)
+        self.undo_button = self._button("Undo", "undo:", 110, 6, 42)
         self._style_floating_button(self.undo_button, primary=False)
         self.undo_button.setToolTip_(f"Undo: {self.undo_hotkey.raw}")
         self.undo_button.setEnabled_(False)
         self.chrome.addSubview_(self.undo_button)
 
+        self.optimize_button = self._button("Optimize", "optimize:", 158, 6, 98)
+        self._style_floating_button(self.optimize_button, primary=True)
+        self.optimize_button.setToolTip_(self._status_tooltip(self._ready_status()))
+        self.chrome.addSubview_(self.optimize_button)
+
         self.buttons = [
             self.quota_button,
+            self.hide_button,
             self.optimize_button,
             self.undo_button,
         ]
@@ -952,8 +953,11 @@ class JustSayingApp(NSObject):
         button.setBordered_(False)
         button.setWantsLayer_(True)
         button.layer().setCornerRadius_(15)
+        is_hide = hasattr(self, "hide_button") and button is self.hide_button
         if primary:
             color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.93, 0.96, 1.0, 0.22)
+        elif is_hide:
+            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.95, 0.72, 0.24, 0.86)
         else:
             color = NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.12)
         button.layer().setBackgroundColor_(color.CGColor())
@@ -964,19 +968,23 @@ class JustSayingApp(NSObject):
         import AppKit
 
         is_quota = hasattr(self, "quota_button") and button is self.quota_button
+        is_hide = hasattr(self, "hide_button") and button is self.hide_button
         if is_quota and hasattr(NSFont, "monospacedDigitSystemFontOfSize_weight_"):
-            font = NSFont.monospacedDigitSystemFontOfSize_weight_(11, 0.38)
+            font = NSFont.monospacedDigitSystemFontOfSize_weight_(10, 0.38)
         elif is_quota:
-            font = NSFont.boldSystemFontOfSize_(11)
+            font = NSFont.boldSystemFontOfSize_(10)
+        elif is_hide:
+            font = NSFont.boldSystemFontOfSize_(15)
         elif primary:
             font = NSFont.systemFontOfSize_weight_(13, 0.38)
         else:
             font = NSFont.boldSystemFontOfSize_(13)
-        color = (
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.94, 0.98, 1.0, 1.0)
-            if primary
-            else NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.78)
-        )
+        if is_hide:
+            color = NSColor.colorWithCalibratedWhite_alpha_(0.0, 0.7)
+        elif primary:
+            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.94, 0.98, 1.0, 1.0)
+        else:
+            color = NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.78)
         attrs = {
             AppKit.NSFontAttributeName: font,
             AppKit.NSForegroundColorAttributeName: color,
@@ -1100,11 +1108,9 @@ class JustSayingApp(NSObject):
     @objc.python_method
     def _quota_text(self) -> str:
         if self._quota_exhausted():
-            return f"Machine code: {self.machine_code}"
-        if self.cloud_plan == "paid":
-            return "Activated"
+            return f"0/{self.quota_daily_limit or 20} available; click Get extra for a free refill"
         if self.quota_remaining is not None and self.quota_daily_limit is not None:
-            return f"{self.quota_remaining}/{self.quota_daily_limit} available; refills 1 every 10 minutes"
+            return f"{self.quota_remaining}/{self.quota_daily_limit} available; refills 1 every 5 minutes"
         if self.quota_refreshing:
             return "Loading..."
         return "Unavailable"

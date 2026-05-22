@@ -43,8 +43,8 @@ class CloudSettings:
     upstream_api_key: str
     download_url: str
     github_url: str
-    upgrade_url: str
-    activation_secret: str
+    extra_url: str
+    grant_secret: str
 
 
 @dataclass(frozen=True)
@@ -58,8 +58,7 @@ class AccessContext:
     minute_count: int
     ip_hour_count: int
     device_code: str
-    upgrade_url: str
-    is_activated: bool
+    extra_url: str
 
 
 def main() -> None:
@@ -97,7 +96,7 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                     "anonymousDailyLimit": settings.quota_capacity,
                     "quotaLimit": settings.quota_capacity,
                     "quotaRefillSeconds": settings.quota_refill_seconds,
-                    "upgradeUrl": settings.upgrade_url,
+                    "extraUrl": settings.extra_url,
                     "downloadUrl": settings.download_url,
                     "githubUrl": settings.github_url,
                 }
@@ -116,8 +115,8 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
         if path == "/v1/clean":
             self._handle_clean()
             return
-        if path == "/v1/activate":
-            self._handle_activate()
+        if path == "/v1/grant":
+            self._handle_grant()
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -147,7 +146,7 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                 "remaining": settings.quota_capacity,
                 "refillSeconds": settings.quota_refill_seconds,
                 "deviceCode": device_code,
-                "upgradeUrl": _upgrade_url(settings, device_code),
+                "extraUrl": _extra_url(settings, device_code),
                 "plan": "free",
                 "maxChars": settings.max_chars,
             }
@@ -168,8 +167,8 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                 "refillAt": access.refill_at,
                 "resetAt": access.refill_at,
                 "deviceCode": access.device_code,
-                "upgradeUrl": access.upgrade_url,
-                "plan": "paid" if access.is_activated else "free",
+                "extraUrl": access.extra_url,
+                "plan": "free",
                 "maxChars": settings.max_chars,
             }
         )
@@ -203,11 +202,11 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
         if isinstance(access, tuple):
             self._send_json(access[0], access[1])
             return
-        if not access.is_activated and access.remaining <= 0:
+        if access.remaining <= 0:
             self._send_json(
                 {
                     "error": "QUOTA_EMPTY",
-                    "message": "Free quota is empty. Upgrade or wait for it to refill.",
+                    "message": "Free quota is empty. Get extra or wait for it to refill.",
                     "remaining": 0,
                     "dailyLimit": access.quota_limit,
                     "quotaLimit": access.quota_limit,
@@ -215,7 +214,7 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                     "refillAt": access.refill_at,
                     "resetAt": access.refill_at,
                     "deviceCode": access.device_code,
-                    "upgradeUrl": access.upgrade_url,
+                    "extraUrl": access.extra_url,
                     "plan": "free",
                     "maxChars": settings.max_chars,
                 },
@@ -243,39 +242,38 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
             access.ip_hash,
             len(text),
             settings,
-            consume_quota=not access.is_activated,
         )
         self._send_json(
             {
                 "result": result,
-                "remaining": access.quota_limit if access.is_activated else usage["remaining"],
+                "remaining": usage["remaining"],
                 "dailyLimit": access.quota_limit,
                 "quotaLimit": access.quota_limit,
                 "refillSeconds": access.refill_seconds,
                 "refillAt": usage["refillAt"],
                 "resetAt": usage["refillAt"],
                 "deviceCode": access.device_code,
-                "upgradeUrl": access.upgrade_url,
-                "plan": "paid" if access.is_activated else "free",
+                "extraUrl": access.extra_url,
+                "plan": "free",
                 "maxChars": settings.max_chars,
             }
         )
 
-    def _handle_activate(self) -> None:
+    def _handle_grant(self) -> None:
         payload = self._read_json_body()
         if payload is None:
             return
 
         settings = _load_settings()
-        if not settings.activation_secret:
-            self._send_json({"error": "ACTIVATION_DISABLED"}, HTTPStatus.SERVICE_UNAVAILABLE)
+        if not settings.grant_secret:
+            self._send_json({"error": "EXTRA_DISABLED"}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
 
         submitted_secret = _bearer_token(self.headers.get("Authorization", "")) or str(
-            payload.get("activationSecret") or "",
+            payload.get("grantSecret") or "",
         ).strip()
-        if not hmac.compare_digest(submitted_secret, settings.activation_secret):
-            self._send_json({"error": "BAD_ACTIVATION_SECRET"}, HTTPStatus.UNAUTHORIZED)
+        if not hmac.compare_digest(submitted_secret, settings.grant_secret):
+            self._send_json({"error": "BAD_GRANT_SECRET"}, HTTPStatus.UNAUTHORIZED)
             return
 
         device_code = _normalize_device_code(str(payload.get("deviceCode") or ""))
@@ -286,13 +284,30 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
         with usage_lock:
             data = _read_data_file()
             sessions = data.setdefault("sessions", {})
-            for session in sessions.values():
+            for token_hash, session in sessions.items():
                 if not isinstance(session, dict):
                     continue
                 if _normalize_device_code(str(session.get("deviceCode") or "")) == device_code:
-                    session["activatedAt"] = _now_iso()
+                    tokens = data.setdefault("tokens", {})
+                    token_usage = tokens.get(token_hash) or {}
+                    token_usage["balance"] = float(settings.quota_capacity)
+                    token_usage["quotaUpdatedAt"] = _now_iso()
+                    token_usage["extraCount"] = int(token_usage.get("extraCount") or 0) + 1
+                    token_usage["lastExtraAt"] = _now_iso()
+                    tokens[token_hash] = token_usage
+                    session["lastExtraAt"] = token_usage["lastExtraAt"]
                     _write_data_file(data)
-                    self._send_json({"ok": True, "deviceCode": device_code, "plan": "paid"})
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "deviceCode": device_code,
+                            "remaining": settings.quota_capacity,
+                            "dailyLimit": settings.quota_capacity,
+                            "quotaLimit": settings.quota_capacity,
+                            "refillSeconds": settings.quota_refill_seconds,
+                            "plan": "free",
+                        }
+                    )
                     return
 
         self._send_json({"error": "DEVICE_NOT_FOUND"}, HTTPStatus.NOT_FOUND)
@@ -315,7 +330,6 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
             if not device_code:
                 device_code = _device_code_for_token_hash(token_hash)
                 session["deviceCode"] = device_code
-            is_activated = bool(session.get("activatedAt"))
             token_usage = _token_usage(payload, token_hash, settings)
             ip_usage = _ip_usage(payload, ip_hash)
             _write_data_file(payload)
@@ -323,15 +337,14 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
         return AccessContext(
             token_hash=token_hash,
             ip_hash=ip_hash,
-            remaining=settings.quota_capacity if is_activated else token_usage["remaining"],
+            remaining=token_usage["remaining"],
             quota_limit=settings.quota_capacity,
             refill_seconds=settings.quota_refill_seconds,
             refill_at=token_usage["refillAt"],
             minute_count=token_usage["minuteCount"],
             ip_hour_count=ip_usage["hourCount"],
             device_code=device_code,
-            upgrade_url=_upgrade_url(settings, device_code),
-            is_activated=is_activated,
+            extra_url=_extra_url(settings, device_code),
         )
 
     def _read_json_body(self, allow_empty: bool = False) -> dict[str, Any] | None:
@@ -384,8 +397,8 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
 
 def _load_settings() -> CloudSettings:
     return CloudSettings(
-        quota_capacity=_env_int("KNOWSAYIN_API_QUOTA_CAPACITY", 10),
-        quota_refill_seconds=_env_int("KNOWSAYIN_API_QUOTA_REFILL_SECONDS", 600),
+        quota_capacity=_env_int("KNOWSAYIN_API_QUOTA_CAPACITY", 20),
+        quota_refill_seconds=_env_int("KNOWSAYIN_API_QUOTA_REFILL_SECONDS", 300),
         token_minute_limit=_env_int("KNOWSAYIN_API_TOKEN_MINUTE_LIMIT", 5),
         ip_hour_limit=_env_int("KNOWSAYIN_API_IP_HOUR_LIMIT", 60),
         global_daily_limit=_env_int("KNOWSAYIN_API_GLOBAL_DAILY_LIMIT", 2000),
@@ -397,8 +410,8 @@ def _load_settings() -> CloudSettings:
         upstream_api_key=(os.getenv("KNOWSAYIN_UPSTREAM_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or "").strip(),
         download_url=os.getenv("KNOWSAYIN_DOWNLOAD_URL", "https://knowsayin.com/download").strip(),
         github_url=os.getenv("KNOWSAYIN_GITHUB_URL", "https://github.com/aginchan-spec/knowsayin").strip(),
-        upgrade_url=os.getenv("KNOWSAYIN_UPGRADE_URL", "https://knowsayin.com").strip(),
-        activation_secret=os.getenv("KNOWSAYIN_API_ACTIVATION_SECRET", "").strip(),
+        extra_url=os.getenv("KNOWSAYIN_EXTRA_URL", "https://knowsayin.com").strip(),
+        grant_secret=os.getenv("KNOWSAYIN_API_GRANT_SECRET", "").strip(),
     )
 
 
@@ -478,7 +491,6 @@ def _increment_usage(
     ip_hash: str,
     chars: int,
     settings: CloudSettings,
-    consume_quota: bool = True,
 ) -> dict[str, Any]:
     with usage_lock:
         payload = _read_data_file()
@@ -488,7 +500,7 @@ def _increment_usage(
         tokens = payload.setdefault("tokens", {})
         token_usage = tokens.get(token_hash) or {"count": 0, "chars": 0}
         balance, _ = _refill_quota_balance(token_usage, settings)
-        if consume_quota and balance >= 1:
+        if balance >= 1:
             balance -= 1
         token_usage["balance"] = balance
         token_usage["quotaUpdatedAt"] = _now_iso()
@@ -586,8 +598,8 @@ def _normalize_device_code(value: str) -> str:
     return "".join(ch for ch in value.upper() if ch.isalnum())[:16]
 
 
-def _upgrade_url(settings: CloudSettings, device_code: str) -> str:
-    base_url = settings.upgrade_url or "https://knowsayin.com"
+def _extra_url(settings: CloudSettings, device_code: str) -> str:
+    base_url = settings.extra_url or "https://knowsayin.com"
     parsed = urlparse(base_url)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query["machine"] = device_code
