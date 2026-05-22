@@ -101,10 +101,10 @@ p {
 h1 {
   margin: 0;
   color: var(--ink);
-  font-size: clamp(31px, 9vw, 58px);
-  line-height: 0.98;
-  font-weight: 860;
-  text-shadow: 0 0 24px rgba(123, 183, 255, 0.22);
+  font-size: clamp(23px, 5vw, 34px);
+  line-height: 1.08;
+  font-weight: 820;
+  text-shadow: 0 0 18px rgba(123, 183, 255, 0.16);
 }
 
 .top-actions {

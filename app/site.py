@@ -19,16 +19,76 @@ from .config import PROJECT_ROOT
 SITE_ROOT = PROJECT_ROOT / "site"
 MAX_BODY_BYTES = 32 * 1024
 COMPLIMENT_OPTIONS = [
-    {"id": "taste", "label": "你很有品味"},
-    {"id": "kind", "label": "你很好人"},
-    {"id": "lucky", "label": "好人一生平安"},
-    {"id": "handsome", "label": "这个工具做得有点帅"},
-    {"id": "tokens", "label": "谢谢你帮我省 token"},
-    {"id": "button", "label": "这个按钮值得被点击"},
-    {"id": "thoughtful", "label": "你想得真周到"},
-    {"id": "prompt", "label": "愿你的 prompt 永远清楚"},
-    {"id": "useful", "label": "KnowSayin 有点东西"},
-    {"id": "coffee", "label": "请收下一杯精神咖啡"},
+    {
+        "id": "taste",
+        "labels": {
+            "zh": "送给作者：你很有品味",
+            "en": "For the author: you have excellent taste.",
+        },
+    },
+    {
+        "id": "kind",
+        "labels": {
+            "zh": "送给作者：你真的很用心",
+            "en": "For the author: you put real care into this.",
+        },
+    },
+    {
+        "id": "lucky",
+        "labels": {
+            "zh": "送给作者：愿你好人一生平安",
+            "en": "For the author: may good things find you.",
+        },
+    },
+    {
+        "id": "handsome",
+        "labels": {
+            "zh": "送给作者：这个工具做得有点帅",
+            "en": "For the author: this tool is quietly handsome.",
+        },
+    },
+    {
+        "id": "tokens",
+        "labels": {
+            "zh": "送给作者：谢谢你帮我省 token",
+            "en": "For the author: thanks for saving my tokens.",
+        },
+    },
+    {
+        "id": "button",
+        "labels": {
+            "zh": "送给作者：这个按钮值得被点击",
+            "en": "For the author: this button deserves the click.",
+        },
+    },
+    {
+        "id": "thoughtful",
+        "labels": {
+            "zh": "送给作者：你想得真周到",
+            "en": "For the author: this is thoughtfully made.",
+        },
+    },
+    {
+        "id": "prompt",
+        "labels": {
+            "zh": "送给作者：愿你的 prompt 永远清楚",
+            "en": "For the author: may your prompts stay clear.",
+        },
+    },
+    {
+        "id": "useful",
+        "labels": {
+            "zh": "送给作者：KnowSayin 真的有用",
+            "en": "For the author: KnowSayin is genuinely useful.",
+        },
+    },
+    {
+        "id": "coffee",
+        "labels": {
+            "zh": "送给作者：请收下一杯精神咖啡",
+            "en": "For the author: please accept a virtual coffee.",
+        },
+    },
 ]
 
 

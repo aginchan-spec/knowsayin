@@ -16,6 +16,76 @@ const complimentGrid = document.querySelector("#complimentGrid");
 const TOKEN_KEY = "knowsayin.cloudToken";
 const DEVICE_KEY = "knowsayin.deviceCode";
 const LONG_TEXT_THRESHOLD = 800;
+const LANG = detectLanguage();
+
+const COPY = {
+  en: {
+    headline: "Refine a rough prompt",
+    getExtraEyebrow: "Get extra",
+    extraTitle: "Send the author a nice note to refill for free",
+    extraSubmit: "Send and refill",
+    optimizeButton: "Optimize",
+    getExtraButton: "Get extra",
+    sourceLabel: "Original",
+    sourcePlaceholder: "Paste dictated text, notes, or rough thoughts here",
+    resultLabel: "Result",
+    resultPlaceholder: "Your refined prompt will appear here",
+    copyButton: "Copy result",
+    clearButton: "Clear",
+    quotaUnknown: "Quota -",
+    quotaPrefix: "Quota",
+    requestFailed: "Request failed.",
+    machine: "Machine",
+    machineAuto: "Machine code will load automatically.",
+    chooseNiceNote: "Choose a nice note for the author, then refill for free.",
+    emptyText: "Enter text to optimize.",
+    optimizing: "Optimizing...",
+    optimizingLong: "Refining long text...",
+    optimized: "Optimized.",
+    missingMachine: "Open this page from the KnowSayin app so the machine code is included.",
+    pickCompliment: "Pick one nice note for the author.",
+    refilling: "Refilling quota...",
+    refilled: "Quota refilled. Go back to KnowSayin and keep going.",
+    refillFailed: "Could not refill quota. Please try again later.",
+    copied: "Copied.",
+    selected: "Result selected. Copy it manually.",
+    cleared: "Cleared.",
+    linkedMachine: "Machine code loaded. Pick a nice note for the author to refill.",
+  },
+  zh: {
+    headline: "整理粗糙 prompt",
+    getExtraEyebrow: "补额度",
+    extraTitle: "选一句好话送给作者，免费补满额度",
+    extraSubmit: "送出并补额度",
+    optimizeButton: "优化",
+    getExtraButton: "补额度",
+    sourceLabel: "原文",
+    sourcePlaceholder: "把语音转写、随手记录或粗糙想法粘贴在这里",
+    resultLabel: "结果",
+    resultPlaceholder: "整理后的 prompt 会出现在这里",
+    copyButton: "复制结果",
+    clearButton: "清除",
+    quotaUnknown: "额度 -",
+    quotaPrefix: "额度",
+    requestFailed: "请求失败。",
+    machine: "机器码",
+    machineAuto: "机器码会自动带过来。",
+    chooseNiceNote: "选一句好话送给作者，马上免费补满额度。",
+    emptyText: "请输入要优化的文字。",
+    optimizing: "正在优化...",
+    optimizingLong: "正在整理长文本...",
+    optimized: "已优化。",
+    missingMachine: "请从 KnowSayin App 打开这个页面，机器码会自动带过来。",
+    pickCompliment: "先选一句好话送给作者。",
+    refilling: "正在补额度...",
+    refilled: "额度已补满，回到 KnowSayin 继续用。",
+    refillFailed: "补额度失败，请稍后再试。",
+    copied: "已复制。",
+    selected: "已选中结果，可手动复制。",
+    cleared: "已清除。",
+    linkedMachine: "机器码已带过来，选一句好话送给作者即可补额度。",
+  },
+};
 
 const state = {
   config: {},
@@ -27,6 +97,38 @@ const state = {
   quotaLimit: null,
   maxChars: 3000,
 };
+
+function detectLanguage() {
+  const forcedLanguage = new URL(window.location.href).searchParams.get("lang") || "";
+  if (forcedLanguage.toLowerCase().startsWith("zh")) {
+    return "zh";
+  }
+  if (forcedLanguage.toLowerCase().startsWith("en")) {
+    return "en";
+  }
+  const languages = navigator.languages || [navigator.language || "en"];
+  return languages.some((value) => String(value).toLowerCase().startsWith("zh")) ? "zh" : "en";
+}
+
+function text(key) {
+  return COPY[LANG][key] || COPY.en[key] || key;
+}
+
+function applyLocale() {
+  document.documentElement.lang = LANG === "zh" ? "zh-CN" : "en";
+  document.title = text("headline");
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = text(node.dataset.i18n);
+  });
+  sourceText.placeholder = text("sourcePlaceholder");
+  resultText.placeholder = text("resultPlaceholder");
+  optimizeButton.textContent = actionButtonLabel();
+  setQuota(state.remaining, state.quotaLimit);
+}
+
+function actionButtonLabel() {
+  return quotaEmpty() ? text("getExtraButton") : text("optimizeButton");
+}
 
 function normalizeDeviceCode(value) {
   return Array.from(value || "")
@@ -60,7 +162,7 @@ function requestJson(path, payload, token = "") {
   }).then(async (response) => {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const error = new Error(data.message || "请求失败。");
+      const error = new Error(data.message || text("requestFailed"));
       error.data = data;
       error.status = response.status;
       throw error;
@@ -84,11 +186,11 @@ function setQuota(remaining, quotaLimit) {
   state.remaining = Number.isFinite(remaining) ? remaining : null;
   state.quotaLimit = Number.isFinite(quotaLimit) ? quotaLimit : null;
   if (state.remaining === null || state.quotaLimit === null) {
-    quotaLine.textContent = "额度 -";
+    quotaLine.textContent = text("quotaUnknown");
   } else {
-    quotaLine.textContent = `额度 ${state.remaining}/${state.quotaLimit}`;
+    quotaLine.textContent = `${text("quotaPrefix")} ${state.remaining}/${state.quotaLimit}`;
   }
-  optimizeButton.textContent = quotaEmpty() ? "Get extra" : "Optimize";
+  optimizeButton.textContent = actionButtonLabel();
 }
 
 function quotaEmpty() {
@@ -167,16 +269,76 @@ async function refreshUsage() {
 
 function renderCompliments(options) {
   const fallback = [
-    { id: "taste", label: "你很有品味" },
-    { id: "kind", label: "你很好人" },
-    { id: "lucky", label: "好人一生平安" },
-    { id: "handsome", label: "这个工具做得有点帅" },
-    { id: "tokens", label: "谢谢你帮我省 token" },
-    { id: "button", label: "这个按钮值得被点击" },
-    { id: "thoughtful", label: "你想得真周到" },
-    { id: "prompt", label: "愿你的 prompt 永远清楚" },
-    { id: "useful", label: "KnowSayin 有点东西" },
-    { id: "coffee", label: "请收下一杯精神咖啡" },
+    {
+      id: "taste",
+      labels: {
+        zh: "送给作者：你很有品味",
+        en: "For the author: you have excellent taste.",
+      },
+    },
+    {
+      id: "kind",
+      labels: {
+        zh: "送给作者：你真的很用心",
+        en: "For the author: you put real care into this.",
+      },
+    },
+    {
+      id: "lucky",
+      labels: {
+        zh: "送给作者：愿你好人一生平安",
+        en: "For the author: may good things find you.",
+      },
+    },
+    {
+      id: "handsome",
+      labels: {
+        zh: "送给作者：这个工具做得有点帅",
+        en: "For the author: this tool is quietly handsome.",
+      },
+    },
+    {
+      id: "tokens",
+      labels: {
+        zh: "送给作者：谢谢你帮我省 token",
+        en: "For the author: thanks for saving my tokens.",
+      },
+    },
+    {
+      id: "button",
+      labels: {
+        zh: "送给作者：这个按钮值得被点击",
+        en: "For the author: this button deserves the click.",
+      },
+    },
+    {
+      id: "thoughtful",
+      labels: {
+        zh: "送给作者：你想得真周到",
+        en: "For the author: this is thoughtfully made.",
+      },
+    },
+    {
+      id: "prompt",
+      labels: {
+        zh: "送给作者：愿你的 prompt 永远清楚",
+        en: "For the author: may your prompts stay clear.",
+      },
+    },
+    {
+      id: "useful",
+      labels: {
+        zh: "送给作者：KnowSayin 真的有用",
+        en: "For the author: KnowSayin is genuinely useful.",
+      },
+    },
+    {
+      id: "coffee",
+      labels: {
+        zh: "送给作者：请收下一杯精神咖啡",
+        en: "For the author: please accept a virtual coffee.",
+      },
+    },
   ];
   const compliments = options.length ? options : fallback;
   complimentGrid.replaceChildren();
@@ -184,12 +346,22 @@ function renderCompliments(options) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "compliment-option";
-    button.textContent = option.label;
+    button.textContent = complimentLabel(option);
     button.dataset.id = option.id;
     button.setAttribute("role", "option");
     button.addEventListener("click", () => selectCompliment(option.id));
     complimentGrid.appendChild(button);
   });
+}
+
+function complimentLabel(option) {
+  if (option && option.labels) {
+    return option.labels[LANG] || option.labels.en || option.labels.zh || "";
+  }
+  if (option && typeof option.label === "string") {
+    return option.label;
+  }
+  return "";
 }
 
 function selectCompliment(id) {
@@ -209,20 +381,20 @@ function updateExtraPanel(force = false) {
   if (!shouldShow) {
     return;
   }
-  machineLine.textContent = deviceCode ? `Machine ${deviceCode}` : "Machine code will load automatically.";
+  machineLine.textContent = deviceCode ? `${text("machine")} ${deviceCode}` : text("machineAuto");
 }
 
 async function optimize() {
   if (quotaEmpty()) {
     updateExtraPanel(true);
     extraPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-    setStatus("选一句好话，马上补满额度。");
+    setStatus(text("chooseNiceNote"));
     return;
   }
 
-  const text = sourceText.value.trim();
-  if (!text) {
-    setStatus("请输入要优化的文字。", "error");
+  const sourceValue = sourceText.value.trim();
+  if (!sourceValue) {
+    setStatus(text("emptyText"), "error");
     sourceText.focus();
     return;
   }
@@ -230,14 +402,14 @@ async function optimize() {
   optimizeButton.disabled = true;
   copyButton.disabled = true;
   document.body.dataset.busy = "true";
-  setStatus(textLength(text) >= LONG_TEXT_THRESHOLD ? "正在整理长文本..." : "正在优化...");
+  setStatus(textLength(sourceValue) >= LONG_TEXT_THRESHOLD ? text("optimizingLong") : text("optimizing"));
 
   try {
     await ensureSession();
     const data = await requestJson(
       "/api/clean",
       {
-        text,
+        text: sourceValue,
         mode: "medium",
       },
       state.token,
@@ -251,14 +423,14 @@ async function optimize() {
     setQuota(Number(data.remaining), Number(data.quotaLimit || data.dailyLimit));
     updateCharCount();
     updateExtraPanel();
-    setStatus("已优化。");
+    setStatus(text("optimized"));
     resultText.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     if (error.data && error.data.error === "QUOTA_EMPTY") {
       setQuota(0, state.quotaLimit || 20);
       updateExtraPanel(true);
     }
-    setStatus(error.message || "优化失败。", "error");
+    setStatus(error.message || text("requestFailed"), "error");
   } finally {
     optimizeButton.disabled = false;
     delete document.body.dataset.busy;
@@ -268,16 +440,16 @@ async function optimize() {
 async function getExtra() {
   const deviceCode = getExtraDeviceCode();
   if (!deviceCode) {
-    setStatus("请从 KnowSayin App 打开这个页面，机器码会自动带过来。", "error");
+    setStatus(text("missingMachine"), "error");
     return;
   }
   if (!state.selectedCompliment) {
-    setStatus("先选一句好话。", "error");
+    setStatus(text("pickCompliment"), "error");
     return;
   }
 
   extraButton.disabled = true;
-  setStatus("正在补额度...");
+  setStatus(text("refilling"));
   try {
     const data = await requestJson("/api/extra", {
       deviceCode,
@@ -287,27 +459,27 @@ async function getExtra() {
       setQuota(Number(data.remaining), Number(data.quotaLimit || data.dailyLimit));
       await refreshUsage();
     }
-    setStatus("额度已补满，回到 KnowSayin 继续用。", "success");
-    optimizeButton.textContent = quotaEmpty() ? "Get extra" : "Optimize";
+    setStatus(text("refilled"), "success");
+    optimizeButton.textContent = actionButtonLabel();
   } catch (error) {
-    setStatus(error.message || "补额度失败，请稍后再试。", "error");
+    setStatus(error.message || text("refillFailed"), "error");
   } finally {
     extraButton.disabled = false;
   }
 }
 
 async function copyResult() {
-  const text = resultText.value.trim();
-  if (!text) {
+  const resultValue = resultText.value.trim();
+  if (!resultValue) {
     return;
   }
   try {
-    await navigator.clipboard.writeText(text);
-    setStatus("已复制。", "success");
+    await navigator.clipboard.writeText(resultValue);
+    setStatus(text("copied"), "success");
   } catch {
     resultText.focus();
     resultText.select();
-    setStatus("已选中结果，可手动复制。");
+    setStatus(text("selected"));
   }
 }
 
@@ -316,7 +488,7 @@ function clearText() {
   resultText.value = "";
   copyButton.disabled = true;
   updateCharCount();
-  setStatus("已清除。");
+  setStatus(text("cleared"));
   sourceText.focus();
 }
 
@@ -332,8 +504,9 @@ sourceText.addEventListener("input", () => {
 state.linkedMachineCode = readMachineFromUrl();
 if (state.linkedMachineCode) {
   updateExtraPanel(true);
-  setStatus("机器码已带过来，选一句好话即可补额度。", "success");
+  setStatus(text("linkedMachine"), "success");
 }
 
+applyLocale();
 updateCharCount();
 loadConfig().then(refreshUsage);
