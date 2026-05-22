@@ -9,7 +9,7 @@ import os
 import secrets
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,6 +24,7 @@ from .optimizer import _optimize_user_message
 
 
 DATA_PATH = Path(os.getenv("KNOWSAYIN_API_DATA_PATH") or PROJECT_ROOT / ".knowsayin-cloud-usage.json")
+USAGE_LOG_PATH = Path(os.getenv("KNOWSAYIN_API_USAGE_LOG_PATH") or PROJECT_ROOT / ".knowsayin-service-events.jsonl")
 MAX_BODY_BYTES = 96 * 1024
 usage_lock = threading.RLock()
 
@@ -45,6 +46,8 @@ class CloudSettings:
     github_url: str
     extra_url: str
     grant_secret: str
+    admin_secret: str
+    usage_log_path: Path
 
 
 @dataclass(frozen=True)
@@ -81,7 +84,8 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
         if path == "/v1/health":
             self._send_json({"ok": True, "name": APP_NAME, "version": APP_VERSION})
             return
@@ -101,6 +105,9 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                     "githubUrl": settings.github_url,
                 }
             )
+            return
+        if path == "/v1/admin/usage-stats":
+            self._handle_admin_usage_stats(parsed_url.query)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -138,6 +145,14 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
             sessions = payload.setdefault("sessions", {})
             sessions[token_hash] = {"createdAt": _now_iso(), "deviceCode": device_code}
             _write_data_file(payload)
+        _log_usage_event(
+            self,
+            settings,
+            "session_created",
+            device_code=device_code,
+            remaining=settings.quota_capacity,
+            quota_limit=settings.quota_capacity,
+        )
         self._send_json(
             {
                 "token": token,
@@ -155,9 +170,18 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
     def _handle_usage(self) -> None:
         access = self._resolve_access()
         if isinstance(access, tuple):
+            _log_usage_event(self, _load_settings(), "usage_rejected", status="error", error=access[0].get("error"))
             self._send_json(access[0], access[1])
             return
         settings = _load_settings()
+        _log_usage_event(
+            self,
+            settings,
+            "usage_checked",
+            device_code=access.device_code,
+            remaining=access.remaining,
+            quota_limit=access.quota_limit,
+        )
         self._send_json(
             {
                 "remaining": access.remaining,
@@ -185,9 +209,18 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
 
         settings = _load_settings()
         if not text:
+            _log_usage_event(self, settings, "clean_rejected", status="error", error="EMPTY_TEXT", chars=0)
             self._send_json({"error": "EMPTY_TEXT", "message": "请输入要优化的文字。"}, HTTPStatus.BAD_REQUEST)
             return
         if len(text) > settings.max_chars:
+            _log_usage_event(
+                self,
+                settings,
+                "clean_rejected",
+                status="error",
+                error="TEXT_TOO_LONG",
+                chars=len(text),
+            )
             self._send_json(
                 {
                     "error": "TEXT_TOO_LONG",
@@ -200,9 +233,28 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
 
         access = self._resolve_access()
         if isinstance(access, tuple):
+            _log_usage_event(
+                self,
+                settings,
+                "clean_rejected",
+                status="error",
+                error=access[0].get("error"),
+                chars=len(text),
+            )
             self._send_json(access[0], access[1])
             return
         if access.remaining <= 0:
+            _log_usage_event(
+                self,
+                settings,
+                "clean_rejected",
+                status="error",
+                error="QUOTA_EMPTY",
+                device_code=access.device_code,
+                chars=len(text),
+                remaining=0,
+                quota_limit=access.quota_limit,
+            )
             self._send_json(
                 {
                     "error": "QUOTA_EMPTY",
@@ -222,15 +274,48 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
             )
             return
         if access.minute_count >= settings.token_minute_limit or access.ip_hour_count >= settings.ip_hour_limit:
+            _log_usage_event(
+                self,
+                settings,
+                "clean_rejected",
+                status="error",
+                error="RATE_LIMITED",
+                device_code=access.device_code,
+                chars=len(text),
+                remaining=access.remaining,
+                quota_limit=access.quota_limit,
+            )
             self._send_json({"error": "RATE_LIMITED", "message": "请求太频繁，请稍后再试。"}, HTTPStatus.TOO_MANY_REQUESTS)
             return
         if _global_daily_count() >= settings.global_daily_limit:
+            _log_usage_event(
+                self,
+                settings,
+                "clean_rejected",
+                status="error",
+                error="GLOBAL_LIMIT",
+                device_code=access.device_code,
+                chars=len(text),
+                remaining=access.remaining,
+                quota_limit=access.quota_limit,
+            )
             self._send_json({"error": "GLOBAL_LIMIT", "message": "今日全站额度已用完。"}, HTTPStatus.TOO_MANY_REQUESTS)
             return
 
         try:
             result = _call_upstream(text, mode, settings)
         except Exception:
+            _log_usage_event(
+                self,
+                settings,
+                "clean_failed",
+                status="error",
+                error="UPSTREAM_FAILED",
+                device_code=access.device_code,
+                chars=len(text),
+                remaining=access.remaining,
+                quota_limit=access.quota_limit,
+            )
             self._send_json(
                 {"error": "UPSTREAM_FAILED", "message": "云端优化失败，请稍后再试。"},
                 HTTPStatus.SERVICE_UNAVAILABLE,
@@ -242,6 +327,16 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
             access.ip_hash,
             len(text),
             settings,
+        )
+        _log_usage_event(
+            self,
+            settings,
+            "clean_succeeded",
+            device_code=access.device_code,
+            chars=len(text),
+            result_chars=len(result),
+            remaining=usage["remaining"],
+            quota_limit=access.quota_limit,
         )
         self._send_json(
             {
@@ -266,6 +361,7 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
 
         settings = _load_settings()
         if not settings.grant_secret:
+            _log_usage_event(self, settings, "grant_rejected", status="error", error="EXTRA_DISABLED")
             self._send_json({"error": "EXTRA_DISABLED"}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
 
@@ -273,11 +369,13 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
             payload.get("grantSecret") or "",
         ).strip()
         if not hmac.compare_digest(submitted_secret, settings.grant_secret):
+            _log_usage_event(self, settings, "grant_rejected", status="error", error="BAD_GRANT_SECRET")
             self._send_json({"error": "BAD_GRANT_SECRET"}, HTTPStatus.UNAUTHORIZED)
             return
 
         device_code = _normalize_device_code(str(payload.get("deviceCode") or ""))
         if not device_code:
+            _log_usage_event(self, settings, "grant_rejected", status="error", error="BAD_DEVICE_CODE")
             self._send_json({"error": "BAD_DEVICE_CODE"}, HTTPStatus.BAD_REQUEST)
             return
 
@@ -297,6 +395,14 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                     tokens[token_hash] = token_usage
                     session["lastExtraAt"] = token_usage["lastExtraAt"]
                     _write_data_file(data)
+                    _log_usage_event(
+                        self,
+                        settings,
+                        "grant_succeeded",
+                        device_code=device_code,
+                        remaining=settings.quota_capacity,
+                        quota_limit=settings.quota_capacity,
+                    )
                     self._send_json(
                         {
                             "ok": True,
@@ -310,7 +416,31 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                     )
                     return
 
+        _log_usage_event(
+            self,
+            settings,
+            "grant_rejected",
+            status="error",
+            error="DEVICE_NOT_FOUND",
+            device_code=device_code,
+        )
         self._send_json({"error": "DEVICE_NOT_FOUND"}, HTTPStatus.NOT_FOUND)
+
+    def _handle_admin_usage_stats(self, query: str) -> None:
+        settings = _load_settings()
+        admin_secret = settings.admin_secret or settings.grant_secret
+        if not admin_secret:
+            self._send_json({"error": "ADMIN_DISABLED"}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        submitted_secret = _bearer_token(self.headers.get("Authorization", ""))
+        if not hmac.compare_digest(submitted_secret, admin_secret):
+            self._send_json({"error": "BAD_ADMIN_SECRET"}, HTTPStatus.UNAUTHORIZED)
+            return
+
+        params = dict(parse_qsl(query, keep_blank_values=True))
+        days = _safe_positive_int(params.get("days"), 0)
+        self._send_json(_usage_log_stats(settings.usage_log_path, days=days))
 
     def _resolve_access(self) -> AccessContext | tuple[dict[str, Any], HTTPStatus]:
         token = _bearer_token(self.headers.get("Authorization", ""))
@@ -412,6 +542,8 @@ def _load_settings() -> CloudSettings:
         github_url=os.getenv("KNOWSAYIN_GITHUB_URL", "https://github.com/aginchan-spec/knowsayin").strip(),
         extra_url=os.getenv("KNOWSAYIN_EXTRA_URL", "https://knowsayin.com").strip(),
         grant_secret=os.getenv("KNOWSAYIN_API_GRANT_SECRET", "").strip(),
+        admin_secret=os.getenv("KNOWSAYIN_API_ADMIN_SECRET", "").strip(),
+        usage_log_path=Path(os.getenv("KNOWSAYIN_API_USAGE_LOG_PATH") or USAGE_LOG_PATH),
     )
 
 
@@ -431,6 +563,243 @@ def _call_upstream(text: str, mode: str, settings: CloudSettings) -> str:
     if not result.strip():
         raise RuntimeError("Empty upstream result")
     return result.strip()
+
+
+def _log_usage_event(
+    handler: BaseHTTPRequestHandler,
+    settings: CloudSettings,
+    event: str,
+    status: str = "ok",
+    **fields: Any,
+) -> None:
+    try:
+        ip = _client_ip(handler)
+        entry: dict[str, Any] = {
+            "ts": _now_iso(),
+            "date": _today_key(),
+            "event": event,
+            "status": status,
+            "ip": ip,
+            "ipHash": _hash_ip(ip, settings.token_secret),
+            "method": handler.command,
+            "path": urlparse(handler.path).path,
+        }
+        user_agent = handler.headers.get("User-Agent", "").strip()
+        if user_agent:
+            entry["userAgent"] = user_agent[:300]
+        aliases = {
+            "device_code": "deviceCode",
+            "quota_limit": "quotaLimit",
+            "result_chars": "resultChars",
+        }
+        for key, value in fields.items():
+            if value is None or value == "":
+                continue
+            entry[aliases.get(key, key)] = value
+        _append_usage_log(settings.usage_log_path, entry)
+    except Exception:
+        return
+
+
+def _append_usage_log(path: Path, entry: dict[str, Any]) -> None:
+    with usage_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+        os.chmod(path, 0o600)
+
+
+def _usage_log_stats(path: Path, days: int = 0) -> dict[str, Any]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days) if days > 0 else None
+    stats: dict[str, Any] = {
+        "generatedAt": _now_iso(),
+        "days": days,
+        "logPath": str(path),
+        "totals": {
+            "events": 0,
+            "sessions": 0,
+            "usageChecks": 0,
+            "cleanRequests": 0,
+            "cleanSuccesses": 0,
+            "cleanErrors": 0,
+            "grants": 0,
+            "grantErrors": 0,
+            "submittedChars": 0,
+            "optimizedChars": 0,
+            "uniqueIps": 0,
+            "uniqueDevices": 0,
+        },
+        "eventsByType": {},
+        "byIp": [],
+        "byDevice": [],
+        "daily": [],
+        "malformedLines": 0,
+    }
+    if not path.exists():
+        return stats
+
+    ips: dict[str, dict[str, Any]] = {}
+    devices: dict[str, dict[str, Any]] = {}
+    daily: dict[str, dict[str, Any]] = {}
+    unique_ips: set[str] = set()
+    unique_devices: set[str] = set()
+
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                stats["malformedLines"] += 1
+                continue
+            if not isinstance(entry, dict):
+                stats["malformedLines"] += 1
+                continue
+            if cutoff is not None:
+                timestamp = _parse_iso(str(entry.get("ts") or ""))
+                if timestamp is None or timestamp < cutoff:
+                    continue
+            _accumulate_usage_stats(stats, ips, devices, daily, unique_ips, unique_devices, entry)
+
+    stats["totals"]["uniqueIps"] = len(unique_ips)
+    stats["totals"]["uniqueDevices"] = len(unique_devices)
+    stats["byIp"] = _finalize_usage_buckets(ips.values(), "devices")
+    stats["byDevice"] = _finalize_usage_buckets(devices.values(), "ips")
+    stats["daily"] = _finalize_daily_buckets(daily.values())
+    return stats
+
+
+def _accumulate_usage_stats(
+    stats: dict[str, Any],
+    ips: dict[str, dict[str, Any]],
+    devices: dict[str, dict[str, Any]],
+    daily: dict[str, dict[str, Any]],
+    unique_ips: set[str],
+    unique_devices: set[str],
+    entry: dict[str, Any],
+) -> None:
+    event = str(entry.get("event") or "unknown")
+    status = str(entry.get("status") or "")
+    ip = str(entry.get("ip") or "")
+    device_code = _normalize_device_code(str(entry.get("deviceCode") or entry.get("device_code") or ""))
+    date = str(entry.get("date") or "") or _date_from_timestamp(str(entry.get("ts") or ""))
+    chars = _safe_positive_int(entry.get("chars"), 0)
+
+    totals = stats["totals"]
+    stats["eventsByType"][event] = int(stats["eventsByType"].get(event) or 0) + 1
+
+    if ip:
+        unique_ips.add(ip)
+    if device_code:
+        unique_devices.add(device_code)
+
+    for bucket in (
+        _usage_bucket(ips, ip, "ip") if ip else None,
+        _usage_bucket(devices, device_code, "deviceCode") if device_code else None,
+        _usage_bucket(daily, date, "date") if date else None,
+    ):
+        if bucket is None:
+            continue
+        _increment_bucket(bucket, event, status, chars, entry)
+        if ip and bucket.get("date"):
+            bucket["_ips"].add(ip)
+        if device_code and bucket.get("date"):
+            bucket["_devices"].add(device_code)
+        if ip and bucket.get("deviceCode"):
+            bucket["_ips"].add(ip)
+        if device_code and bucket.get("ip"):
+            bucket["_devices"].add(device_code)
+
+    _increment_bucket(totals, event, status, chars, entry)
+
+
+def _usage_bucket(buckets: dict[str, dict[str, Any]], key: str, key_name: str) -> dict[str, Any]:
+    bucket = buckets.get(key)
+    if bucket is None:
+        bucket = {
+            key_name: key,
+            "events": 0,
+            "sessions": 0,
+            "usageChecks": 0,
+            "cleanRequests": 0,
+            "cleanSuccesses": 0,
+            "cleanErrors": 0,
+            "grants": 0,
+            "grantErrors": 0,
+            "submittedChars": 0,
+            "optimizedChars": 0,
+            "firstSeenAt": "",
+            "lastSeenAt": "",
+            "_ips": set(),
+            "_devices": set(),
+        }
+        buckets[key] = bucket
+    return bucket
+
+
+def _increment_bucket(bucket: dict[str, Any], event: str, status: str, chars: int, entry: dict[str, Any]) -> None:
+    bucket["events"] = int(bucket.get("events") or 0) + 1
+    if event == "session_created":
+        bucket["sessions"] = int(bucket.get("sessions") or 0) + 1
+    elif event == "usage_checked":
+        bucket["usageChecks"] = int(bucket.get("usageChecks") or 0) + 1
+    elif event.startswith("clean_"):
+        bucket["cleanRequests"] = int(bucket.get("cleanRequests") or 0) + 1
+        bucket["submittedChars"] = int(bucket.get("submittedChars") or 0) + chars
+        if event == "clean_succeeded":
+            bucket["cleanSuccesses"] = int(bucket.get("cleanSuccesses") or 0) + 1
+            bucket["optimizedChars"] = int(bucket.get("optimizedChars") or 0) + chars
+        elif status == "error":
+            bucket["cleanErrors"] = int(bucket.get("cleanErrors") or 0) + 1
+    elif event == "grant_succeeded":
+        bucket["grants"] = int(bucket.get("grants") or 0) + 1
+    elif event.startswith("grant_") and status == "error":
+        bucket["grantErrors"] = int(bucket.get("grantErrors") or 0) + 1
+
+    if entry.get("remaining") is not None:
+        bucket["lastRemaining"] = entry.get("remaining")
+    quota_limit = entry.get("quotaLimit") if entry.get("quotaLimit") is not None else entry.get("quota_limit")
+    if quota_limit is not None:
+        bucket["quotaLimit"] = quota_limit
+    _touch_bucket(bucket, str(entry.get("ts") or ""))
+
+
+def _touch_bucket(bucket: dict[str, Any], timestamp: str) -> None:
+    if not timestamp:
+        return
+    if not bucket.get("firstSeenAt") or timestamp < bucket["firstSeenAt"]:
+        bucket["firstSeenAt"] = timestamp
+    if not bucket.get("lastSeenAt") or timestamp > bucket["lastSeenAt"]:
+        bucket["lastSeenAt"] = timestamp
+
+
+def _finalize_usage_buckets(buckets: Any, related_key: str) -> list[dict[str, Any]]:
+    finalized = []
+    private_key = f"_{related_key}"
+    for bucket in buckets:
+        item = {key: value for key, value in bucket.items() if not key.startswith("_")}
+        item[related_key] = sorted(bucket.get(private_key, set()))
+        finalized.append(item)
+    return sorted(
+        finalized,
+        key=lambda item: (
+            -int(item.get("cleanSuccesses") or 0),
+            -int(item.get("events") or 0),
+            str(item.get("ip") or item.get("deviceCode") or item.get("date") or ""),
+        ),
+    )
+
+
+def _finalize_daily_buckets(buckets: Any) -> list[dict[str, Any]]:
+    finalized = []
+    for bucket in buckets:
+        item = {key: value for key, value in bucket.items() if not key.startswith("_")}
+        item["uniqueIps"] = len(bucket.get("_ips", set()))
+        item["uniqueDevices"] = len(bucket.get("_devices", set()))
+        finalized.append(item)
+    return sorted(finalized, key=lambda item: str(item.get("date") or ""))
 
 
 def _read_data_file() -> dict[str, Any]:
@@ -630,6 +999,19 @@ def _next_reset_iso() -> str:
     now = datetime.now(timezone.utc)
     tomorrow_ts = datetime(now.year, now.month, now.day, tzinfo=timezone.utc).timestamp() + 86400
     return datetime.fromtimestamp(tomorrow_ts, tz=timezone.utc).isoformat()
+
+
+def _date_from_timestamp(value: str) -> str:
+    parsed = _parse_iso(value)
+    return parsed.strftime("%Y-%m-%d") if parsed else ""
+
+
+def _safe_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 0 else default
 
 
 def _env_int(name: str, default: int) -> int:

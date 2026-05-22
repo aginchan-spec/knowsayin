@@ -45,7 +45,8 @@ The page automatically follows the browser/system language for English or Chines
 
 - The desktop client does not store raw prompt text, voice recordings, or private transcripts.
 - KnowSayin Cloud processes submitted text only to return the cleaned prompt.
-- Usage accounting is based on quota and character counts, not saved prompt contents.
+- Service logs may record connection metadata such as IP address, machine code, quota events, and character counts.
+- Prompt contents and optimized results are not saved in service logs.
 - The desktop client does not include provider API keys.
 - Never commit `.env`, private recordings, private transcripts, API keys, tokens, or credentials.
 

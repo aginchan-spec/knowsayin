@@ -182,7 +182,7 @@ class KnowSayinSiteHandler(BaseHTTPRequestHandler):
         if payload is None:
             return
 
-        headers = {}
+        headers = _forward_client_headers(self)
         if require_auth:
             token = _bearer_token(self.headers.get("Authorization", ""))
             if not token:
@@ -237,7 +237,7 @@ class KnowSayinSiteHandler(BaseHTTPRequestHandler):
             "/v1/grant",
             {"deviceCode": device_code, "compliment": compliment_id},
             settings,
-            headers={"Authorization": f"Bearer {settings.grant_secret}"},
+            headers={**_forward_client_headers(self), "Authorization": f"Bearer {settings.grant_secret}"},
         )
         self._send_json(response, status)
 
@@ -411,6 +411,26 @@ def _parse_json_response(value: str) -> dict[str, Any]:
 
 def _normalize_device_code(value: str) -> str:
     return "".join(ch for ch in value.upper() if ch.isalnum())[:16]
+
+
+def _forward_client_headers(handler: BaseHTTPRequestHandler) -> dict[str, str]:
+    client_ip = _client_ip(handler)
+    headers = {}
+    if client_ip:
+        headers["CF-Connecting-IP"] = client_ip
+        headers["X-Forwarded-For"] = client_ip
+    user_agent = handler.headers.get("User-Agent", "").strip()
+    if user_agent:
+        headers["User-Agent"] = user_agent[:300]
+    return headers
+
+
+def _client_ip(handler: BaseHTTPRequestHandler) -> str:
+    cf_ip = handler.headers.get("CF-Connecting-IP", "").strip()
+    if cf_ip:
+        return cf_ip
+    forwarded = handler.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    return forwarded or handler.client_address[0]
 
 
 def _bearer_token(header: str) -> str:

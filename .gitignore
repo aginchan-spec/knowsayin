@@ -19,5 +19,7 @@ transcripts/private/
 .justsaying-web-usage.tmp
 .knowsayin-cloud-usage.json
 .knowsayin-cloud-usage.tmp
+.knowsayin-service-events.jsonl
+.knowsayin-service-events.tmp
 .knowsayin-web-usage.json
 .knowsayin-web-usage.tmp
