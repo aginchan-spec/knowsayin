@@ -430,10 +430,22 @@ body[data-busy="true"] button.primary::after {
 @media (max-width: 620px) {
   .app-shell {
     width: min(100% - 24px, 820px);
+    padding-top: max(12px, env(safe-area-inset-top));
   }
 
   .topbar {
     align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  h1 {
+    font-size: clamp(22px, 7vw, 28px);
+  }
+
+  .headline-sub,
+  .desktop-strip {
+    display: none;
   }
 
   .top-actions {
@@ -446,8 +458,8 @@ body[data-busy="true"] button.primary::after {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .instant-steps {
-    grid-template-columns: minmax(0, 1fr);
+  textarea {
+    min-height: 190px;
   }
 }
 

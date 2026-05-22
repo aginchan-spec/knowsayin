@@ -140,6 +140,16 @@ function applyLocale() {
   setQuota(state.remaining, state.quotaLimit);
 }
 
+function autoFocusSourceText() {
+  if (state.linkedMachineCode) {
+    return;
+  }
+  if (!window.matchMedia("(min-width: 621px) and (pointer: fine)").matches) {
+    return;
+  }
+  sourceText.focus({ preventScroll: true });
+}
+
 function actionButtonLabel() {
   return quotaEmpty() ? text("getExtraButton") : text("optimizeButton");
 }
@@ -523,4 +533,5 @@ if (state.linkedMachineCode) {
 
 applyLocale();
 updateCharCount();
+autoFocusSourceText();
 loadConfig().then(refreshUsage);
