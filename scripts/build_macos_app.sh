@@ -17,7 +17,7 @@ if [[ ! -x "$PYINSTALLER" ]]; then
 fi
 
 if [[ ! -x "$PYINSTALLER" ]]; then
-  echo "pyinstaller not found. Run: python3 -m pip install -r requirements.txt" >&2
+  echo "pyinstaller not found. Run: scripts/install_macos.sh, or install requirements in your active venv." >&2
   exit 1
 fi
 

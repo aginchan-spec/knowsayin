@@ -3,10 +3,8 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from openai import OpenAI
-
 from .cloud_client import clean_prompt_with_cloud
-from .model_config import DEFAULT_OPTIMIZE_PROMPT, ModelConfig, get_active_model_config
+from .model_config import ModelConfig, get_active_model_config
 
 
 Mode = Literal["light", "medium", "strong"]
@@ -31,35 +29,7 @@ def optimize_prompt(
 
     model_config = app_settings or get_active_model_config()
 
-    if model_config.is_cloud and model_config.llm_enabled:
-        return clean_prompt_with_cloud(normalized, mode, model_config.base_url)
-
-    if not model_config.llm_enabled:
-        return fallback_optimize(normalized, mode)
-
-    try:
-        return _optimize_with_openai(normalized, mode, model_config)
-    except Exception:
-        return fallback_optimize(normalized, mode)
-
-
-def _optimize_with_openai(text: str, mode: Mode, model_config: ModelConfig) -> str:
-    client_kwargs: dict[str, str] = {"api_key": model_config.api_key}
-    if model_config.base_url:
-        client_kwargs["base_url"] = model_config.base_url
-
-    client = OpenAI(**client_kwargs)
-    system_prompt = model_config.optimize_prompt.strip() or DEFAULT_OPTIMIZE_PROMPT
-    response = client.chat.completions.create(
-        model=model_config.model,
-        temperature=0.2,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": _optimize_user_message(text, mode)},
-        ],
-    )
-    result = response.choices[0].message.content or ""
-    return result.strip()
+    return clean_prompt_with_cloud(normalized, mode, model_config.base_url)
 
 
 def _optimize_user_message(text: str, mode: Mode) -> str:

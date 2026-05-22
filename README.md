@@ -1,6 +1,6 @@
 # KnowSayin Desktop V1
 
-KnowSayin 是一个桌面浮窗工具：先在目标对话框里输入口语化文字，再点浮窗里的 `优化`，它会原地把当前输入框内容改写成更清楚的 prompt。
+KnowSayin 是一个桌面浮窗工具：先在目标对话框里输入口语化文字，再点浮窗里的 `Optimize`，它会原地把当前输入框内容改写成更清楚的 prompt。
 
 语音转文字交给系统输入法或豆包输入法；KnowSayin 只负责清洗、整理和强化 prompt。
 
@@ -33,11 +33,11 @@ POST /v1/clean
 ```bash
 git clone https://github.com/aginchan-spec/knowsayin.git
 cd knowsayin
-python3 -m pip install --user -r requirements.txt
-cp .env.example .env
-scripts/build_macos_app.sh
+scripts/install_macos.sh
 open "/Applications/KnowSayin.app"
 ```
+
+安装脚本会在仓库内创建 `.venv`，不会把依赖装进全局 Python；如果 `.env` 不存在，会从 `.env.example` 初始化一次。
 
 首次打开后，到 macOS：
 
@@ -50,12 +50,14 @@ System Settings -> Privacy & Security -> Accessibility
 ## 运行桌面版开发模式
 
 ```bash
-python3 -m pip install --user -r requirements.txt
-cp .env.example .env
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+test -f .env || cp .env.example .env
 python -m app.main
 ```
 
-启动后会出现一个很小的置顶毛玻璃浮窗，主按钮是 `优化`，旁边有 `撤`、`...` 和 `-`。菜单栏也会出现 `KS`，用于显示浮窗、打开设置、检查更新、打开授权设置或退出。
+启动后会出现一个很小的置顶毛玻璃浮窗，只包含三个按钮：剩余额度、`Optimize` 和 `Undo`。`Optimize` 按钮为绿色表示云端已连线且 macOS 权限已授权；红色表示未连线或未授权。菜单栏也会出现 `KS`，用于显示浮窗、打开设置、检查更新、打开授权设置或退出。
 
 打包成双击启动的 macOS App：
 
@@ -104,25 +106,24 @@ python -m app.web --make-pass Anna --daily-limit 100 --max-chars 3000 --base-url
 
 使用记录只保存每日次数和字符数，不保存原文和优化结果。
 
-## 模型设置
+## 桌面设置
 
-点击浮窗里的 `...`：
+点击浮窗里的额度按钮，或从 macOS 菜单栏 `KS -> Settings` 打开设置：
 
-1. 默认选择 `KnowSayin Cloud`，不需要填写本机 API key。
-2. 如果要自备 provider，可切换到 OpenAI、DeepSeek、OpenRouter 等兼容 OpenAI API 的服务。
+1. 桌面版固定使用 `KnowSayin Cloud`，不支持用户填写自己的 API key、Base URL 或模型 ID。
+2. 设置窗口会显示当前 Cloud endpoint 和匿名剩余额度。
 3. 按需要修改优化快捷键和还原快捷键。
-4. 按需要修改优化提示词。
-5. 点 `保存`。
+4. 点 `Save`。
 
-如果云服务不可用、额度耗尽或上游失败，桌面版不会用低质量 fallback 静默替换原文；它会显示错误并保留用户输入。只有在用户主动选择自备 provider 且未配置 key 时，才使用本地基础清洗。
+如果云服务不可用、额度耗尽或上游失败，桌面版不会用低质量 fallback 静默替换原文；它会显示错误并保留用户输入。
 
 ## 使用流程
 
 1. 在 ChatGPT、Claude、浏览器、微信或其他目标输入框里输入一段文字。
-2. 点击 KnowSayin 浮窗里的 `优化`，或按 `Option + Shift`。
+2. 点击 KnowSayin 浮窗里的 `Optimize`，或按 `Option + Shift`。
 3. KnowSayin 会切回目标 App，优先用 macOS Accessibility 直接读取和替换当前文本；不支持时再退回 `Cmd+A/C/V`。
-4. 如果想撤回最近一次优化，点击 `撤`，或连续按三下 `Option`。
-5. 点击 `-` 会隐藏浮窗；需要恢复时，从 macOS 菜单栏 `KS` 里点 `显示浮窗`。
+4. 如果想撤回最近一次优化，点击 `Undo`，或连续按三下 `Option`。
+5. 需要恢复浮窗时，从 macOS 菜单栏 `KS` 里点 `Show Floating Window`。
 
 ## 配置示例
 
@@ -132,15 +133,6 @@ KNOWSAYIN_CLOUD_BASE_URL=https://api.knowsayin.com
 KNOWSAYIN_CLOUD_MODEL=knowsayin-cloud
 KNOWSAYIN_OPTIMIZE_HOTKEY=option+shift
 KNOWSAYIN_UNDO_HOTKEY=option*3
-```
-
-自备 provider：
-
-```bash
-KNOWSAYIN_PROVIDER=deepseek
-OPENAI_API_KEY=你的 key
-OPENAI_BASE_URL=https://api.deepseek.com/v1
-OPENAI_MODEL=deepseek-chat
 ```
 
 ## 权限和限制

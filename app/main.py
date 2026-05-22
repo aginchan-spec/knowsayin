@@ -6,7 +6,6 @@ import time
 from dataclasses import dataclass
 
 import objc
-import pyperclip
 import Quartz
 from ApplicationServices import AXIsProcessTrusted
 from AppKit import (
@@ -24,14 +23,9 @@ from AppKit import (
     NSMenu,
     NSMenuItem,
     NSPanel,
-    NSPopUpButton,
-    NSScrollView,
     NSScreen,
-    NSSecureTextField,
     NSStatusBar,
     NSTextField,
-    NSTextView,
-    NSView,
     NSVisualEffectView,
     NSWorkspace,
     NSEvent,
@@ -42,20 +36,13 @@ from PyObjCTools import AppHelper
 from .model_config import (
     APP_NAME,
     APP_VERSION,
-    CLOUD_PROVIDER_ID,
-    DEFAULT_CLOUD_MODEL,
     ENV_PATH,
+    DEFAULT_CLOUD_API_BASE_URL,
     DEFAULT_OPTIMIZE_HOTKEY,
-    DEFAULT_OPTIMIZE_PROMPT,
     DEFAULT_UNDO_HOTKEY,
     get_active_model_config,
-    list_remote_models,
-    load_api_key,
     load_model_settings,
-    provider_by_id,
-    provider_by_name,
-    provider_names,
-    save_model_settings,
+    save_desktop_settings,
 )
 from .optimizer import optimize_prompt
 from .paste import CapturedText, capture_focused_text, replace_captured_text
@@ -80,7 +67,6 @@ class JustSayingApp(NSObject):
         self.target_name = None
         self.last_original: str | None = None
         self.last_capture: CapturedText | None = None
-        self.collapsed = False
         self.hotkey_down: dict[str, bool] = {"optimize": False, "undo": False}
         self.previous_modifier_flags = 0
         self.tap_state: dict[str, tuple[int, float]] = {"optimize": (0, 0.0), "undo": (0, 0.0)}
@@ -93,6 +79,10 @@ class JustSayingApp(NSObject):
         self.needs_input_monitoring = False
         self.permission_notice_keys: set[str] = set()
         self.last_key_tap_attempt = 0.0
+        self.quota_remaining: int | None = None
+        self.quota_daily_limit: int | None = None
+        self.quota_refreshing = False
+        self.cloud_available = False
         self._reload_hotkeys_from_settings()
         self.buttons: list[NSButton] = []
         self.window = self._build_window()
@@ -113,7 +103,15 @@ class JustSayingApp(NSObject):
             None,
             True,
         )
+        self.cloud_tracker = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            60.0,
+            self,
+            "refreshCloudStatus:",
+            None,
+            True,
+        )
         self.window.orderFrontRegardless()
+        self._refresh_cloud_quota_async()
 
     def windowWillClose_(self, notification) -> None:
         NSApp.terminate_(self)
@@ -132,7 +130,7 @@ class JustSayingApp(NSObject):
 
         self.target_app = front_app
         self.target_pid = pid
-        self.target_name = front_app.localizedName() or "目标 App"
+        self.target_name = front_app.localizedName() or "target app"
         if not self.busy:
             self._set_status(self._ready_status())
 
@@ -142,9 +140,6 @@ class JustSayingApp(NSObject):
     def undo_(self, sender) -> None:
         self._start_undo()
 
-    def toggleCollapse_(self, sender) -> None:
-        self.hideFloatingWindow_(sender)
-
     def hideFloatingWindow_(self, sender) -> None:
         self._hide_floating_window()
 
@@ -152,118 +147,44 @@ class JustSayingApp(NSObject):
         self._show_floating_window()
 
     def openPermissions_(self, sender) -> None:
-        self._open_permission_settings()
+        self._open_permission_settings("accessibility")
 
     def openSettings_(self, sender) -> None:
         self._show_settings_window()
 
     def checkUpdate_(self, sender) -> None:
-        self._set_status("正在检查 KnowSayin 更新...")
+        self._set_status("Checking for KnowSayin updates...")
         threading.Thread(target=self._check_update_worker, daemon=True).start()
 
-    def settingsProviderChanged_(self, sender) -> None:
-        provider = provider_by_name(str(self.provider_popup.titleOfSelectedItem()))
-        self.base_url_field.setStringValue_(provider.base_url)
-        self.model_field.setStringValue_(provider.default_model)
-        self.model_popup.removeAllItems()
-        if provider.provider_id == CLOUD_PROVIDER_ID:
-            self.api_key_field.setStringValue_("")
-            self.api_key_field.setEnabled_(False)
-            self.api_key_field.setPlaceholderString_("KnowSayin Cloud 不需要本机 API key")
-            self.settings_status.setStringValue_("KnowSayin Cloud 默认连接 https://api.knowsayin.com。")
-        else:
-            self.api_key_field.setEnabled_(True)
-            self.api_key_field.setPlaceholderString_("保存后写入本地 .env")
-            self.settings_status.setStringValue_("切换 provider 后，填写 API key 并寻找模型。")
-
-    def settingsModelChanged_(self, sender) -> None:
-        selected = self.model_popup.titleOfSelectedItem()
-        if selected:
-            self.model_field.setStringValue_(str(selected))
-
-    def pasteApiKey_(self, sender) -> None:
-        try:
-            text = pyperclip.paste().strip()
-        except Exception as exc:
-            self.settings_status.setStringValue_(f"读取剪贴板失败：{exc}")
-            return
-        if not text:
-            self.settings_status.setStringValue_("剪贴板里没有可粘贴的文本。")
-            return
-        self.api_key_field.setStringValue_(text)
-        self.settings_status.setStringValue_("已从剪贴板填入 API key。")
-
-    def findModels_(self, sender) -> None:
-        if getattr(self, "settings_busy", False):
-            return
-
-        provider = provider_by_name(str(self.provider_popup.titleOfSelectedItem()))
-        if provider.provider_id == CLOUD_PROVIDER_ID:
-            self.model_popup.removeAllItems()
-            self.model_popup.addItemWithTitle_(provider.default_model or DEFAULT_CLOUD_MODEL)
-            self.model_field.setStringValue_(provider.default_model or DEFAULT_CLOUD_MODEL)
-            self.settings_status.setStringValue_("KnowSayin Cloud 使用服务器固定模型，不需要寻找模型。")
-            return
-
-        base_url = str(self.base_url_field.stringValue()).strip()
-        api_key = str(self.api_key_field.stringValue()).strip() or load_api_key(
-            provider.provider_id,
-        )
-
-        self.settings_busy = True
-        self.find_models_button.setEnabled_(False)
-        self.save_settings_button.setEnabled_(False)
-        self.settings_status.setStringValue_("正在寻找模型...")
-        threading.Thread(
-            target=self._find_models_worker,
-            args=(base_url, api_key),
-            daemon=True,
-        ).start()
-
     def saveSettings_(self, sender) -> None:
-        provider = provider_by_name(str(self.provider_popup.titleOfSelectedItem()))
-        base_url = str(self.base_url_field.stringValue()).strip()
-        model = str(self.model_field.stringValue()).strip()
-        api_key = str(self.api_key_field.stringValue()).strip()
-        optimize_prompt_text = str(self.prompt_text_view.string()).strip()
         optimize_hotkey = str(self.optimize_hotkey_field.stringValue()).strip()
         undo_hotkey = str(self.undo_hotkey_field.stringValue()).strip()
 
-        if not base_url:
-            self.settings_status.setStringValue_("请填写 Base URL。")
-            return
-        if not model:
-            self.settings_status.setStringValue_("请填写或选择模型。")
-            return
         try:
             optimize_spec = _parse_hotkey(optimize_hotkey or DEFAULT_OPTIMIZE_HOTKEY)
             undo_spec = _parse_hotkey(undo_hotkey or DEFAULT_UNDO_HOTKEY)
         except ValueError as exc:
-            self.settings_status.setStringValue_(f"快捷键格式错误：{exc}")
+            self.settings_status.setStringValue_(f"Hotkey format error: {exc}")
             return
         if _same_hotkey(optimize_spec, undo_spec):
-            self.settings_status.setStringValue_("优化和还原不能使用同一个快捷键。")
+            self.settings_status.setStringValue_("Optimize and undo cannot use the same hotkey.")
             return
 
         try:
-            save_model_settings(
-                provider.provider_id,
-                base_url,
-                model,
-                api_key,
-                optimize_prompt_text or DEFAULT_OPTIMIZE_PROMPT,
+            save_desktop_settings(
                 optimize_hotkey or DEFAULT_OPTIMIZE_HOTKEY,
                 undo_hotkey or DEFAULT_UNDO_HOTKEY,
             )
         except Exception as exc:
-            self.settings_status.setStringValue_(f"保存失败：{exc}")
+            self.settings_status.setStringValue_(f"Save failed: {exc}")
             return
 
         self._reload_hotkeys_from_settings()
         self._sync_key_event_tap()
         self._update_hotkey_tooltips()
-        self.settings_status.setStringValue_(f"已保存到 {ENV_PATH}。")
+        self.settings_status.setStringValue_(f"Saved to {ENV_PATH}.")
         self._set_status(self._ready_status())
+        self._refresh_cloud_quota_async()
         self.settings_window.orderOut_(self)
 
     def cancelSettings_(self, sender) -> None:
@@ -277,7 +198,7 @@ class JustSayingApp(NSObject):
             self._request_accessibility_permission(show_help=True)
             return
 
-        self._set_status("正在读取当前输入框...")
+        self._set_status("Reading the focused text field...")
         self._set_busy(True)
         self._set_button_title(self.optimize_button, "...", primary=True)
         threading.Thread(target=self._optimize_worker, daemon=True).start()
@@ -287,13 +208,13 @@ class JustSayingApp(NSObject):
         if self.busy:
             return
         if not self.last_original or self.last_capture is None:
-            self._set_status("没有可撤销的优化。")
+            self._set_status("Nothing to undo.")
             if hasattr(self, "undo_button"):
-                self._set_button_title(self.undo_button, "无", primary=False)
+                self._set_button_title(self.undo_button, "No", primary=False)
                 self._reset_title_later()
             return
 
-        self._set_status("正在恢复上一次优化前的文本...")
+        self._set_status("Restoring the previous text...")
         self._set_busy(True)
         self._set_button_title(self.undo_button, "...", primary=False)
         threading.Thread(target=self._restore_worker, daemon=True).start()
@@ -306,18 +227,18 @@ class JustSayingApp(NSObject):
             captured = capture_focused_text(self.target_pid)
             original = captured.text.strip()
             if not original:
-                raise RuntimeError("当前输入框是空的。")
+                raise RuntimeError("The focused text field is empty.")
 
-            AppHelper.callAfter(self._set_status, "正在优化文字...")
+            AppHelper.callAfter(self._set_status, "Optimizing text...")
             cleaned = optimize_prompt(original, "medium").strip()
             if not cleaned:
-                raise RuntimeError("优化结果为空，没有替换。")
+                raise RuntimeError("The optimized result was empty, so nothing was replaced.")
 
             self._activate_target_app()
             replace_captured_text(captured, cleaned)
             self.last_original = original
             self.last_capture = captured
-            AppHelper.callAfter(self._finish, f"已替换（{captured.method}）。")
+            AppHelper.callAfter(self._finish, f"Replaced via {captured.method}.")
         except Exception as exc:
             AppHelper.callAfter(self._fail, str(exc))
 
@@ -326,9 +247,9 @@ class JustSayingApp(NSObject):
         try:
             self._activate_target_app()
             if self.last_capture is None:
-                raise RuntimeError("没有可恢复的原文。")
+                raise RuntimeError("There is no previous text to restore.")
             replace_captured_text(self.last_capture, self.last_original or "")
-            AppHelper.callAfter(self._finish_undo, "已恢复原文。")
+            AppHelper.callAfter(self._finish_undo, "Restored the previous text.")
         except Exception as exc:
             AppHelper.callAfter(self._fail, str(exc))
 
@@ -336,8 +257,9 @@ class JustSayingApp(NSObject):
     def _finish(self, message: str) -> None:
         self._set_status(message)
         self._set_busy(False)
-        self._set_button_title(self.optimize_button, "完成", primary=True)
+        self._set_button_title(self.optimize_button, "Done", primary=True)
         self._reset_title_later()
+        self._refresh_cloud_quota_async()
 
     @objc.python_method
     def _finish_undo(self, message: str) -> None:
@@ -350,26 +272,29 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _fail(self, message: str) -> None:
-        self._set_status(f"失败：{message}")
+        self._set_status(f"Failed: {message}")
         self._set_busy(False)
-        self._set_button_title(self.optimize_button, "失败", primary=True)
+        self._set_button_title(self.optimize_button, "Failed", primary=True)
         self._reset_title_later()
+        self._refresh_cloud_quota_async()
 
     @objc.python_method
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
         for button in self.buttons:
             button.setEnabled_(not busy)
+        if hasattr(self, "quota_button"):
+            self.quota_button.setEnabled_(True)
         if hasattr(self, "undo_button"):
             self.undo_button.setEnabled_((not busy) and bool(self.last_original))
+        self._refresh_connection_indicator()
 
     @objc.python_method
     def _set_status(self, message: str) -> None:
         self.status_message = message
         if hasattr(self, "optimize_button"):
-            self.optimize_button.setToolTip_(f"{message} | 快捷键：{self.optimize_hotkey.raw}")
-        if hasattr(self, "status_dot"):
-            self._refresh_status_dot()
+            self.optimize_button.setToolTip_(self._status_tooltip(message))
+        self._refresh_connection_indicator()
 
     @objc.python_method
     def _reset_title_later(self) -> None:
@@ -380,12 +305,11 @@ class JustSayingApp(NSObject):
         if self.busy:
             return
         if hasattr(self, "optimize_button"):
-            self._set_button_title(self.optimize_button, "优化", primary=True)
+            self._set_button_title(self.optimize_button, "Optimize", primary=True)
         if hasattr(self, "undo_button"):
-            self._set_button_title(self.undo_button, "撤", primary=False)
+            self._set_button_title(self.undo_button, "Undo", primary=False)
             self.undo_button.setEnabled_(bool(self.last_original))
-        if hasattr(self, "collapse_button"):
-            self._set_button_title(self.collapse_button, "-", primary=False)
+        self._refresh_connection_indicator()
 
     @objc.python_method
     def _install_status_item(self) -> None:
@@ -398,17 +322,17 @@ class JustSayingApp(NSObject):
 
         menu = NSMenu.alloc().initWithTitle_(APP_NAME)
         for title, action in (
-            ("显示浮窗", "showFloatingWindow:"),
-            ("设置", "openSettings:"),
-            ("检查更新", "checkUpdate:"),
-            ("打开授权设置", "openPermissions:"),
+            ("Show Floating Window", "showFloatingWindow:"),
+            ("Settings", "openSettings:"),
+            ("Check for Updates", "checkUpdate:"),
+            ("Open Accessibility Settings", "openPermissions:"),
         ):
             item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, "")
             item.setTarget_(self)
             menu.addItem_(item)
 
         menu.addItem_(NSMenuItem.separatorItem())
-        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("退出", "terminate:", "q")
+        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Quit", "terminate:", "q")
         quit_item.setTarget_(NSApp)
         menu.addItem_(quit_item)
         self.status_item.setMenu_(menu)
@@ -422,8 +346,6 @@ class JustSayingApp(NSObject):
     def _show_floating_window(self) -> None:
         if not hasattr(self, "window"):
             return
-        if self.collapsed:
-            self._set_collapsed(False)
         self.window.orderFrontRegardless()
         self._set_status(self._ready_status())
 
@@ -431,21 +353,21 @@ class JustSayingApp(NSObject):
     def _request_accessibility_permission(self, show_help: bool = False) -> bool:
         if AXIsProcessTrusted():
             self.needs_accessibility = False
-            self._refresh_status_dot()
+            self._refresh_connection_indicator()
             return True
 
         self.needs_accessibility = True
-        self._set_status("需要 macOS Accessibility 授权。")
+        self._set_status("macOS Accessibility permission is required.")
         if show_help:
             self._show_permission_notice(
                 "accessibility",
-                "KnowSayin 需要一次授权",
-                "请在 macOS Accessibility / 辅助功能 里打开 KnowSayin。若开关已经打开但仍提示授权，通常是旧构建残留；请重新添加 /Applications/KnowSayin.app，授权后完全退出并重新打开。",
+                "KnowSayin Needs Accessibility Permission",
+                "Open macOS Accessibility settings and turn on KnowSayin. If it is already on but this message remains, remove and re-add /Applications/KnowSayin.app, then quit and reopen the app.",
             )
         return False
 
     @objc.python_method
-    def _open_permission_settings(self, kind: str = "all") -> None:
+    def _open_permission_settings(self, kind: str = "accessibility") -> None:
         import subprocess
 
         urls = []
@@ -468,8 +390,14 @@ class JustSayingApp(NSObject):
             alert = NSAlert.alloc().init()
             alert.setMessageText_(title)
             alert.setInformativeText_(message)
-            alert.addButtonWithTitle_("知道了")
-            alert.runModal()
+            if key == "input-monitoring":
+                alert.addButtonWithTitle_("Open Input Monitoring Settings")
+            else:
+                alert.addButtonWithTitle_("Open Accessibility Settings")
+            alert.addButtonWithTitle_("OK")
+            response = alert.runModal()
+            if int(response) == 1000:
+                self._open_permission_settings("input" if key == "input-monitoring" else "accessibility")
         except Exception:
             pass
 
@@ -483,12 +411,12 @@ class JustSayingApp(NSObject):
             latest = str(config.get("latestVersion") or APP_VERSION)
             download_url = str(config.get("downloadUrl") or "https://knowsayin.com/download")
             if latest == APP_VERSION:
-                message = f"当前版本 {APP_VERSION} 已是最新。"
+                message = f"You are on the latest version ({APP_VERSION})."
             else:
-                message = f"当前版本 {APP_VERSION}，最新版本 {latest}。请到 {download_url} 下载新版。"
+                message = f"You are on {APP_VERSION}; the latest version is {latest}. Download it from {download_url}."
             AppHelper.callAfter(self._show_update_notice, message)
         except Exception as exc:
-            AppHelper.callAfter(self._show_update_notice, f"更新检查失败：{exc}")
+            AppHelper.callAfter(self._show_update_notice, f"Update check failed: {exc}")
 
     @objc.python_method
     def _show_update_notice(self, message: str) -> None:
@@ -496,9 +424,9 @@ class JustSayingApp(NSObject):
         try:
             NSApp.activateIgnoringOtherApps_(True)
             alert = NSAlert.alloc().init()
-            alert.setMessageText_("KnowSayin 更新")
+            alert.setMessageText_("KnowSayin Update")
             alert.setInformativeText_(message)
-            alert.addButtonWithTitle_("知道了")
+            alert.addButtonWithTitle_("OK")
             alert.runModal()
         except Exception:
             pass
@@ -542,10 +470,10 @@ class JustSayingApp(NSObject):
     def _update_hotkey_tooltips(self) -> None:
         if hasattr(self, "optimize_button"):
             self.optimize_button.setToolTip_(
-                self._ready_status() + f" | 快捷键：{self.optimize_hotkey.raw}",
+                self._status_tooltip(self._ready_status()),
             )
         if hasattr(self, "undo_button"):
-            self.undo_button.setToolTip_(f"Undo：{self.undo_hotkey.raw}")
+            self.undo_button.setToolTip_(f"Undo: {self.undo_hotkey.raw}")
 
     @objc.python_method
     def _needs_key_event_tap(self) -> bool:
@@ -618,12 +546,12 @@ class JustSayingApp(NSObject):
         )
         if self.key_event_tap is None:
             self.needs_input_monitoring = True
-            self._set_status("普通按键快捷键需要 Input Monitoring 授权。")
+            self._set_status("This hotkey needs Input Monitoring permission.")
             if show_notice:
                 self._show_permission_notice(
                     "input-monitoring",
-                    "快捷键需要输入监听权限",
-                    "请在 macOS Input Monitoring / 输入监听 里打开 KnowSayin；也可以把快捷键改回 option+shift 来避免这个权限。",
+                    "Hotkey Needs Input Monitoring",
+                    "Open macOS Input Monitoring settings and turn on KnowSayin, or change the hotkey back to option+shift. The default option+shift hotkey does not need Input Monitoring.",
                 )
             return
 
@@ -652,9 +580,12 @@ class JustSayingApp(NSObject):
             self.needs_input_monitoring = False
 
         has_warning = self.needs_accessibility or self.needs_input_monitoring
-        self._refresh_status_dot()
+        self._refresh_connection_indicator()
         if had_warning and not has_warning and not self.busy:
             self._set_status(self._ready_status())
+
+    def refreshCloudStatus_(self, timer) -> None:
+        self._refresh_cloud_quota_async()
 
     @objc.python_method
     def _key_hotkey_action(self, event_type, event) -> str | None:
@@ -731,99 +662,138 @@ class JustSayingApp(NSObject):
             self._start_undo()
 
     @objc.python_method
-    def _set_collapsed(self, collapsed: bool) -> None:
-        if not hasattr(self, "window") or not hasattr(self, "chrome"):
-            return
-        if self.collapsed == collapsed:
-            return
-
-        self.collapsed = collapsed
-        width = 54 if collapsed else 188
-        height = 38 if collapsed else 48
-        frame = self.window.frame()
-        right = frame.origin.x + frame.size.width
-        top = frame.origin.y + frame.size.height
-        new_frame = NSMakeRect(right - width, top - height, width, height)
-        self.window.setFrame_display_animate_(new_frame, True, True)
-        self.chrome.setFrame_(NSMakeRect(0, 0, width, height))
-        self.chrome.layer().setCornerRadius_(height / 2)
-
-        self.optimize_button.setHidden_(collapsed)
-        self.undo_button.setHidden_(collapsed)
-        self.settings_button.setHidden_(collapsed)
-
-        if collapsed:
-            self.status_dot.setFrame_(NSMakeRect(11, 16, 7, 7))
-            self.collapse_button.setFrame_(NSMakeRect(23, 4, 24, 30))
-            self._set_button_title(self.collapse_button, "+", primary=False)
-            self.collapse_button.setToolTip_("展开浮窗")
-            return
-
-        self.status_dot.setFrame_(NSMakeRect(13, 21, 7, 7))
-        self.optimize_button.setFrame_(NSMakeRect(24, 8, 72, 30))
-        self.undo_button.setFrame_(NSMakeRect(100, 8, 24, 30))
-        self.settings_button.setFrame_(NSMakeRect(128, 8, 24, 30))
-        self.collapse_button.setFrame_(NSMakeRect(156, 8, 24, 30))
-        self._set_button_title(self.collapse_button, "-", primary=False)
-        self.collapse_button.setToolTip_("缩小浮窗")
-
-    @objc.python_method
-    def _find_models_worker(self, base_url: str, api_key: str) -> None:
+    def _refresh_cloud_quota_async(self) -> None:
         try:
-            models = list_remote_models(base_url, api_key)
-            AppHelper.callAfter(self._finish_find_models, models)
+            model_config = get_active_model_config()
+        except Exception:
+            self.cloud_available = False
+            self.quota_remaining = None
+            self.quota_daily_limit = None
+            self._refresh_quota_label()
+            self._refresh_connection_indicator()
+            return
+
+        if not model_config.is_cloud:
+            self.cloud_available = False
+            self.quota_refreshing = False
+            self.quota_remaining = None
+            self.quota_daily_limit = None
+            self._refresh_quota_label()
+            self._refresh_connection_indicator()
+            return
+
+        if self.quota_refreshing:
+            return
+
+        self.quota_refreshing = True
+        self._refresh_quota_label()
+        threading.Thread(
+            target=self._cloud_quota_worker,
+            args=(model_config.base_url,),
+            daemon=True,
+        ).start()
+
+    @objc.python_method
+    def _cloud_quota_worker(self, base_url: str) -> None:
+        try:
+            from .cloud_client import get_cloud_usage
+
+            usage = get_cloud_usage(base_url)
+            AppHelper.callAfter(self._finish_cloud_quota, usage)
         except Exception as exc:
-            AppHelper.callAfter(self._fail_find_models, str(exc))
+            AppHelper.callAfter(self._fail_cloud_quota, str(exc))
 
     @objc.python_method
-    def _finish_find_models(self, models: list[str]) -> None:
-        self.model_popup.removeAllItems()
-        self.model_popup.addItemsWithTitles_(models)
-        if models:
-            current_model = str(self.model_field.stringValue()).strip()
-            if current_model in models:
-                self.model_popup.selectItemWithTitle_(current_model)
-            else:
-                self.model_popup.selectItemAtIndex_(0)
-                self.model_field.setStringValue_(models[0])
-        self.settings_status.setStringValue_(f"找到 {len(models)} 个模型。")
-        self._set_settings_busy(False)
+    def _finish_cloud_quota(self, usage: dict) -> None:
+        self.quota_refreshing = False
+        self.cloud_available = True
+        self.quota_remaining = _int_or_none(usage.get("remaining"))
+        self.quota_daily_limit = _int_or_none(usage.get("dailyLimit"))
+        self._refresh_quota_label()
+        self._refresh_connection_indicator()
 
     @objc.python_method
-    def _fail_find_models(self, message: str) -> None:
-        self.settings_status.setStringValue_(message)
-        self._set_settings_busy(False)
+    def _fail_cloud_quota(self, message: str) -> None:
+        self.quota_refreshing = False
+        self.cloud_available = False
+        self.quota_remaining = None
+        self.quota_daily_limit = None
+        self._refresh_quota_label(message)
+        self._refresh_connection_indicator()
 
     @objc.python_method
-    def _set_settings_busy(self, busy: bool) -> None:
-        self.settings_busy = busy
-        self.find_models_button.setEnabled_(not busy)
-        self.save_settings_button.setEnabled_(not busy)
+    def _refresh_quota_label(self, error: str | None = None) -> None:
+        if not hasattr(self, "quota_button"):
+            return
+
+        try:
+            model_config = get_active_model_config()
+        except Exception:
+            self._set_button_title(self.quota_button, "--/--", primary=False)
+            return
+        show_quota = model_config.is_cloud
+        self.quota_button.setHidden_(not show_quota)
+        if not show_quota:
+            return
+
+        if self.quota_remaining is not None and self.quota_daily_limit is not None:
+            text = f"{self.quota_remaining}/{self.quota_daily_limit}"
+            tooltip = f"Cloud quota remaining: {self.quota_remaining} of {self.quota_daily_limit} today"
+        elif self.quota_refreshing:
+            text = "..."
+            tooltip = "Loading cloud quota..."
+        else:
+            text = "--/--"
+            tooltip = f"Cloud quota unavailable: {error}" if error else "Cloud quota unavailable"
+
+        self._set_button_title(self.quota_button, text, primary=False)
+        self.quota_button.setToolTip_(tooltip)
+        if hasattr(self, "settings_quota_label"):
+            self.settings_quota_label.setStringValue_(self._quota_text())
+        if hasattr(self, "optimize_button"):
+            self.optimize_button.setToolTip_(self._status_tooltip(getattr(self, "status_message", "")))
+
+    @objc.python_method
+    def _status_tooltip(self, message: str) -> str:
+        cloud = "Connected" if self.cloud_available else "Offline or checking"
+        permission = "Authorized" if self._has_required_permissions() else "Needs permission"
+        parts = [message, cloud, permission, f"Hotkey: {self.optimize_hotkey.raw}"]
+        if self.quota_remaining is not None and self.quota_daily_limit is not None:
+            parts.append(f"Quota: {self.quota_remaining}/{self.quota_daily_limit}")
+        return " | ".join(part for part in parts if part)
+
+    @objc.python_method
+    def _has_required_permissions(self) -> bool:
+        if not AXIsProcessTrusted():
+            return False
+        if self.needs_input_monitoring:
+            return False
+        return True
 
     @objc.python_method
     def _activate_target_app(self) -> None:
         if self.target_app is None:
-            raise RuntimeError("还没有目标 App。先点一下要改写的对话框。")
+            raise RuntimeError("No target app yet. Click the text field you want to rewrite first.")
         if self.target_app.isTerminated():
-            raise RuntimeError("目标 App 已关闭。先重新点一下要改写的对话框。")
+            raise RuntimeError("The target app closed. Click the target text field again.")
 
         self.target_app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
         time.sleep(0.25)
 
     @objc.python_method
     def _ready_status(self) -> str:
-        target = f"目标：{self.target_name}" if self.target_name else "先点目标输入框"
+        target = f"Target: {self.target_name}" if self.target_name else "Click a target text field first"
         model_config = get_active_model_config()
         if model_config.is_cloud:
-            return f"就绪：KnowSayin Cloud | {target}"
+            return f"Ready: KnowSayin Cloud | {target}"
         if model_config.llm_enabled:
-            return f"就绪：{model_config.provider_name} / {model_config.model} | {target}"
-        return f"就绪：未配置模型，使用本地基础清洗 | {target}"
+            return f"Ready: {model_config.provider_name} / {model_config.model} | {target}"
+        return f"Ready: no model configured; using local cleanup | {target}"
 
     @objc.python_method
     def _build_window(self) -> NSPanel:
-        width = 188
-        height = 48
+        width = 208
+        height = 42
         screen = NSScreen.mainScreen().visibleFrame()
         x = screen.origin.x + screen.size.width - width - 24
         y = screen.origin.y + screen.size.height - height - 54
@@ -871,44 +841,34 @@ class JustSayingApp(NSObject):
             _appkit_constant("NSVisualEffectStateActive", "NSVisualEffectStateActive"),
         )
         self.chrome.setWantsLayer_(True)
-        self.chrome.layer().setCornerRadius_(24)
+        self.chrome.layer().setCornerRadius_(21)
         self.chrome.layer().setMasksToBounds_(True)
         content.addSubview_(self.chrome)
 
-        self.status_dot = NSView.alloc().initWithFrame_(NSMakeRect(13, 21, 7, 7))
-        self.status_dot.setWantsLayer_(True)
-        self.status_dot.layer().setCornerRadius_(3.5)
-        self._refresh_status_dot()
-        self.chrome.addSubview_(self.status_dot)
+        self.quota_button = self._button("--/--", "openSettings:", 8, 6, 52)
+        self._style_floating_button(self.quota_button, primary=False)
+        self.quota_button.setToolTip_("Cloud quota")
+        self.chrome.addSubview_(self.quota_button)
 
-        self.optimize_button = self._button("优化", "optimize:", 24, 8, 72)
+        self.optimize_button = self._button("Optimize", "optimize:", 66, 6, 84)
         self._style_floating_button(self.optimize_button, primary=True)
-        self.optimize_button.setToolTip_(self._ready_status() + f" | 快捷键：{self.optimize_hotkey.raw}")
+        self.optimize_button.setToolTip_(self._status_tooltip(self._ready_status()))
         self.chrome.addSubview_(self.optimize_button)
 
-        self.undo_button = self._button("撤", "undo:", 100, 8, 24)
+        self.undo_button = self._button("Undo", "undo:", 156, 6, 44)
         self._style_floating_button(self.undo_button, primary=False)
-        self.undo_button.setToolTip_(f"Undo：{self.undo_hotkey.raw}")
+        self.undo_button.setToolTip_(f"Undo: {self.undo_hotkey.raw}")
         self.undo_button.setEnabled_(False)
         self.chrome.addSubview_(self.undo_button)
 
-        self.settings_button = self._button("...", "openSettings:", 128, 8, 24)
-        self._style_floating_button(self.settings_button, primary=False)
-        self.settings_button.setToolTip_("设置 API、模型和优化提示词")
-        self.chrome.addSubview_(self.settings_button)
-
-        self.collapse_button = self._button("-", "toggleCollapse:", 156, 8, 24)
-        self._style_floating_button(self.collapse_button, primary=False)
-        self.collapse_button.setToolTip_("隐藏浮窗，可从菜单栏 JS 恢复")
-        self.chrome.addSubview_(self.collapse_button)
-
         self.buttons = [
+            self.quota_button,
             self.optimize_button,
             self.undo_button,
-            self.settings_button,
-            self.collapse_button,
         ]
         self.status_message = self._ready_status()
+        self._refresh_quota_label()
+        self._refresh_connection_indicator()
 
         return window
 
@@ -935,11 +895,15 @@ class JustSayingApp(NSObject):
     def _set_button_title(self, button: NSButton, title: str, primary: bool) -> None:
         import AppKit
 
-        font = (
-            NSFont.systemFontOfSize_weight_(13, 0.38)
-            if primary
-            else NSFont.boldSystemFontOfSize_(13)
-        )
+        is_quota = hasattr(self, "quota_button") and button is self.quota_button
+        if is_quota and hasattr(NSFont, "monospacedDigitSystemFontOfSize_weight_"):
+            font = NSFont.monospacedDigitSystemFontOfSize_weight_(11, 0.38)
+        elif is_quota:
+            font = NSFont.boldSystemFontOfSize_(11)
+        elif primary:
+            font = NSFont.systemFontOfSize_weight_(13, 0.38)
+        else:
+            font = NSFont.boldSystemFontOfSize_(13)
         color = (
             NSColor.colorWithCalibratedRed_green_blue_alpha_(0.94, 0.98, 1.0, 1.0)
             if primary
@@ -954,17 +918,14 @@ class JustSayingApp(NSObject):
         )
 
     @objc.python_method
-    def _refresh_status_dot(self) -> None:
-        if not hasattr(self, "status_dot"):
+    def _refresh_connection_indicator(self) -> None:
+        if not hasattr(self, "optimize_button"):
             return
-        model_config = get_active_model_config()
-        if self.needs_accessibility or self.needs_input_monitoring:
-            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.26, 0.23, 0.95)
-        elif model_config.llm_enabled:
-            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.20, 0.90, 0.58, 0.95)
+        if self._has_required_permissions() and self.cloud_available:
+            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.14, 0.64, 0.36, 0.96)
         else:
-            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.67, 0.25, 0.90)
-        self.status_dot.layer().setBackgroundColor_(color.CGColor())
+            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.82, 0.18, 0.18, 0.96)
+        self.optimize_button.layer().setBackgroundColor_(color.CGColor())
 
     @objc.python_method
     def _show_settings_window(self) -> None:
@@ -973,9 +934,8 @@ class JustSayingApp(NSObject):
             self._load_settings_into_fields()
             return
 
-        self.settings_busy = False
         width = 560
-        height = 650
+        height = 330
         screen = NSScreen.mainScreen().visibleFrame()
         x = screen.origin.x + screen.size.width - width - 48
         y = screen.origin.y + screen.size.height - height - 70
@@ -991,7 +951,7 @@ class JustSayingApp(NSObject):
             NSBackingStoreBuffered,
             False,
         )
-        window.setTitle_("KnowSayin 设置")
+        window.setTitle_("KnowSayin Settings")
         window.setFloatingPanel_(True)
         window.setHidesOnDeactivate_(False)
 
@@ -999,79 +959,37 @@ class JustSayingApp(NSObject):
         content.setWantsLayer_(True)
         content.layer().setBackgroundColor_(NSColor.windowBackgroundColor().CGColor())
 
-        self._label(content, "Provider", 20, 590, 100, 18)
-        self.provider_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(132, 584, 388, 28),
-            False,
-        )
-        self.provider_popup.addItemsWithTitles_(provider_names())
-        self.provider_popup.setTarget_(self)
-        self.provider_popup.setAction_("settingsProviderChanged:")
-        content.addSubview_(self.provider_popup)
+        self._label(content, "Cloud Service", 20, 270, 100, 18)
+        self._value_label(content, "KnowSayin Cloud", 132, 270, 388, 18)
 
-        self._label(content, "API Key", 20, 550, 100, 18)
-        self.api_key_field = NSSecureTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 544, 300, 26),
-        )
-        self.api_key_field.setPlaceholderString_("保存后写入本地 .env")
-        content.addSubview_(self.api_key_field)
+        self._label(content, "Endpoint", 20, 236, 100, 18)
+        self._value_label(content, DEFAULT_CLOUD_API_BASE_URL, 132, 236, 388, 18)
 
-        paste_key_button = self._button("粘贴", "pasteApiKey:", 442, 542, 78)
-        content.addSubview_(paste_key_button)
+        self._label(content, "Quota", 20, 202, 100, 18)
+        self.settings_quota_label = self._value_label(content, self._quota_text(), 132, 202, 388, 18)
 
-        self._label(content, "Base URL", 20, 510, 100, 18)
-        self.base_url_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 504, 388, 26),
-        )
-        content.addSubview_(self.base_url_field)
-
-        self._label(content, "模型", 20, 470, 100, 18)
-        self.model_field = NSTextField.alloc().initWithFrame_(NSMakeRect(132, 464, 388, 26))
-        content.addSubview_(self.model_field)
-
-        self._label(content, "搜索结果", 20, 430, 100, 18)
-        self.model_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(132, 424, 388, 28),
-            False,
-        )
-        self.model_popup.setTarget_(self)
-        self.model_popup.setAction_("settingsModelChanged:")
-        content.addSubview_(self.model_popup)
-
-        self._label(content, "优化快捷键", 20, 390, 100, 18)
+        self._label(content, "Optimize Hotkey", 20, 160, 100, 18)
         self.optimize_hotkey_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 384, 170, 26),
+            NSMakeRect(132, 154, 170, 26),
         )
         self.optimize_hotkey_field.setPlaceholderString_(DEFAULT_OPTIMIZE_HOTKEY)
         content.addSubview_(self.optimize_hotkey_field)
-        self._label(content, "例：option+shift / option+space", 314, 389, 220, 18)
+        self._label(content, "Example: option+shift / option+space", 314, 159, 220, 18)
 
-        self._label(content, "还原快捷键", 20, 354, 100, 18)
+        self._label(content, "Undo Hotkey", 20, 124, 100, 18)
         self.undo_hotkey_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 348, 170, 26),
+            NSMakeRect(132, 118, 170, 26),
         )
         self.undo_hotkey_field.setPlaceholderString_(DEFAULT_UNDO_HOTKEY)
         content.addSubview_(self.undo_hotkey_field)
-        self._label(content, "例：option*3 / command+z", 314, 353, 220, 18)
+        self._label(content, "Example: option*3 / command+z", 314, 123, 220, 18)
 
-        self._label(content, "优化提示词", 20, 312, 100, 18)
-        prompt_scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(132, 112, 388, 190))
-        prompt_scroll.setHasVerticalScroller_(True)
-        prompt_scroll.setBorderType_(_appkit_constant("NSBezelBorder", "NSBezelBorder"))
-        self.prompt_text_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 388, 190))
-        self.prompt_text_view.setFont_(NSFont.systemFontOfSize_(13))
-        self.prompt_text_view.setString_(DEFAULT_OPTIMIZE_PROMPT)
-        prompt_scroll.setDocumentView_(self.prompt_text_view)
-        content.addSubview_(prompt_scroll)
-
-        self.find_models_button = self._button("寻找模型", "findModels:", 132, 66, 110)
-        self.save_settings_button = self._button("保存", "saveSettings:", 252, 66, 90)
-        cancel_button = self._button("取消", "cancelSettings:", 352, 66, 90)
-        content.addSubview_(self.find_models_button)
+        self.save_settings_button = self._button("Save", "saveSettings:", 132, 66, 90)
+        cancel_button = self._button("Cancel", "cancelSettings:", 232, 66, 90)
         content.addSubview_(self.save_settings_button)
         content.addSubview_(cancel_button)
 
-        self.settings_status = NSTextField.labelWithString_(f"设置会保存到 {ENV_PATH}。")
+        self.settings_status = NSTextField.labelWithString_(f"Settings are saved to {ENV_PATH}.")
         self.settings_status.setFrame_(NSMakeRect(20, 20, 520, 32))
         self.settings_status.setFont_(NSFont.systemFontOfSize_(12))
         self.settings_status.setTextColor_(NSColor.secondaryLabelColor())
@@ -1085,22 +1003,12 @@ class JustSayingApp(NSObject):
     @objc.python_method
     def _load_settings_into_fields(self) -> None:
         data = load_model_settings()
-        provider = provider_by_id(data["provider_id"])
-        self.provider_popup.selectItemWithTitle_(provider.name)
-        self.base_url_field.setStringValue_(data["base_url"] or provider.base_url)
-        self.model_field.setStringValue_(data["model"] or provider.default_model)
-        self.api_key_field.setStringValue_(data["api_key"] or "")
-        if provider.provider_id == CLOUD_PROVIDER_ID:
-            self.api_key_field.setEnabled_(False)
-            self.api_key_field.setPlaceholderString_("KnowSayin Cloud 不需要本机 API key")
-        else:
-            self.api_key_field.setEnabled_(True)
-            self.api_key_field.setPlaceholderString_("保存后写入本地 .env")
         self.optimize_hotkey_field.setStringValue_(data["optimize_hotkey"] or DEFAULT_OPTIMIZE_HOTKEY)
         self.undo_hotkey_field.setStringValue_(data["undo_hotkey"] or DEFAULT_UNDO_HOTKEY)
-        self.prompt_text_view.setString_(data["optimize_prompt"] or DEFAULT_OPTIMIZE_PROMPT)
-        self.model_popup.removeAllItems()
-        self.settings_status.setStringValue_(f"设置会保存到 {ENV_PATH}。")
+        self.settings_status.setStringValue_(f"Settings are saved to {ENV_PATH}.")
+        if hasattr(self, "settings_quota_label"):
+            self.settings_quota_label.setStringValue_(self._quota_text())
+        self._refresh_cloud_quota_async()
 
     @objc.python_method
     def _label(self, content, text: str, x: int, y: int, width: int, height: int) -> None:
@@ -1109,6 +1017,23 @@ class JustSayingApp(NSObject):
         label.setFont_(NSFont.systemFontOfSize_(12))
         label.setTextColor_(NSColor.secondaryLabelColor())
         content.addSubview_(label)
+
+    @objc.python_method
+    def _value_label(self, content, text: str, x: int, y: int, width: int, height: int):
+        label = NSTextField.labelWithString_(text)
+        label.setFrame_(NSMakeRect(x, y, width, height))
+        label.setFont_(NSFont.systemFontOfSize_(12))
+        label.setTextColor_(NSColor.labelColor())
+        content.addSubview_(label)
+        return label
+
+    @objc.python_method
+    def _quota_text(self) -> str:
+        if self.quota_remaining is not None and self.quota_daily_limit is not None:
+            return f"{self.quota_remaining}/{self.quota_daily_limit} remaining today"
+        if self.quota_refreshing:
+            return "Loading..."
+        return "Unavailable"
 
 
 KEY_CODES: dict[str, int] = {
@@ -1186,7 +1111,7 @@ def _parse_hotkey(value: str) -> HotkeySpec:
     raw = value.strip()
     normalized = _normalize_hotkey_text(raw)
     if not normalized:
-        raise ValueError("快捷键不能为空。")
+        raise ValueError("Hotkey cannot be empty.")
 
     tap = _parse_tap_hotkey(raw, normalized)
     if tap:
@@ -1194,7 +1119,7 @@ def _parse_hotkey(value: str) -> HotkeySpec:
 
     parts = [part for part in normalized.split("+") if part]
     if not parts:
-        raise ValueError(f"无法识别 `{raw}`。")
+        raise ValueError(f"Could not understand `{raw}`.")
 
     modifiers: list[str] = []
     key: str | None = None
@@ -1206,7 +1131,7 @@ def _parse_hotkey(value: str) -> HotkeySpec:
         key = part
 
     if not modifiers:
-        raise ValueError("至少需要一个修饰键，比如 option 或 shift。")
+        raise ValueError("Use at least one modifier, such as option or shift.")
 
     modifier_set = frozenset(modifiers)
     if key is None:
@@ -1214,7 +1139,7 @@ def _parse_hotkey(value: str) -> HotkeySpec:
 
     keycode = KEY_CODES.get(key)
     if keycode is None:
-        raise ValueError(f"暂不支持按键 `{key}`。")
+        raise ValueError(f"The key `{key}` is not supported yet.")
     return HotkeySpec(raw=raw, kind="key", modifiers=modifier_set, keycode=keycode)
 
 
@@ -1292,6 +1217,13 @@ def _appkit_constant(primary: str, fallback: str) -> int:
     if hasattr(AppKit, primary):
         return int(getattr(AppKit, primary))
     return int(getattr(AppKit, fallback))
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _install_edit_menu(app) -> None:

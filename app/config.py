@@ -29,18 +29,15 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
-    openai_base_url: str | None = os.getenv("OPENAI_BASE_URL")
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1-nano")
-    disable_llm: bool = _env_bool("KNOWSAYIN_DISABLE_LLM", False)
+    cloud_base_url: str = os.getenv("KNOWSAYIN_CLOUD_BASE_URL", "https://api.knowsayin.com")
 
     @property
     def api_key_configured(self) -> bool:
-        return bool(self.openai_api_key)
+        return False
 
     @property
     def llm_enabled(self) -> bool:
-        return self.api_key_configured and not self.disable_llm
+        return True
 
 
 settings = Settings()

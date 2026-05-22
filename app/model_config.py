@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
 import os
-import urllib.request
 from dataclasses import dataclass
-from typing import Any
 
 from dotenv import dotenv_values, set_key
 
@@ -34,30 +31,6 @@ Rules:
 
 
 @dataclass(frozen=True)
-class ProviderPreset:
-    provider_id: str
-    name: str
-    base_url: str
-    default_model: str
-
-
-PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
-    ProviderPreset(CLOUD_PROVIDER_ID, "KnowSayin Cloud", DEFAULT_CLOUD_API_BASE_URL, DEFAULT_CLOUD_MODEL),
-    ProviderPreset("openai", "OpenAI", "https://api.openai.com/v1", "gpt-4.1-nano"),
-    ProviderPreset("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4.1-nano"),
-    ProviderPreset("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
-    ProviderPreset("groq", "Groq", "https://api.groq.com/openai/v1", "llama-3.1-8b-instant"),
-    ProviderPreset("mistral", "Mistral", "https://api.mistral.ai/v1", "mistral-small-latest"),
-    ProviderPreset("together", "Together AI", "https://api.together.xyz/v1", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-    ProviderPreset("xai", "xAI", "https://api.x.ai/v1", "grok-3-mini"),
-    ProviderPreset("moonshot", "Moonshot", "https://api.moonshot.ai/v1", "moonshot-v1-8k"),
-    ProviderPreset("qwen", "Qwen / DashScope", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo"),
-    ProviderPreset("doubao", "Doubao / Volcano Ark", "https://ark.cn-beijing.volces.com/api/v3", ""),
-    ProviderPreset("custom", "Custom OpenAI-compatible", "", ""),
-)
-
-
-@dataclass(frozen=True)
 class ModelConfig:
     provider_id: str
     provider_name: str
@@ -77,77 +50,30 @@ class ModelConfig:
 
     @property
     def llm_enabled(self) -> bool:
-        if self.is_cloud:
-            return bool(self.base_url.strip()) and not self.disable_llm
-        return self.api_key_configured and bool(self.model.strip()) and not self.disable_llm
-
-
-def provider_names() -> list[str]:
-    return [preset.name for preset in PROVIDER_PRESETS]
-
-
-def provider_by_id(provider_id: str) -> ProviderPreset:
-    for preset in PROVID_PRESETS_SAFE():
-        if preset.provider_id == provider_id:
-            return preset
-    return PROVIDER_PRESETS[0]
-
-
-def provider_by_name(name: str) -> ProviderPreset:
-    for preset in PROVID_PRESETS_SAFE():
-        if preset.name == name:
-            return preset
-    return PROVIDER_PRESETS[0]
+        return self.is_cloud and bool(self.base_url.strip()) and not self.disable_llm
 
 
 def load_model_settings() -> dict[str, str]:
     values = _read_env()
-    provider_id = values.get("KNOWSAYIN_PROVIDER") or CLOUD_PROVIDER_ID
-    provider = provider_by_id(provider_id)
-    if provider.provider_id == CLOUD_PROVIDER_ID:
-        base_url = values.get("KNOWSAYIN_CLOUD_BASE_URL") or provider.base_url
-        model = values.get("KNOWSAYIN_CLOUD_MODEL") or provider.default_model
-        api_key = ""
-    else:
-        base_url = values.get("OPENAI_BASE_URL") or provider.base_url
-        model = values.get("OPENAI_MODEL") or provider.default_model
-        api_key = values.get("OPENAI_API_KEY") or ""
     return {
-        "provider_id": provider.provider_id,
-        "base_url": base_url,
-        "model": model,
-        "api_key": api_key,
-        "optimize_prompt": _decode_env_text(
-            values.get("KNOWSAYIN_OPTIMIZE_PROMPT") or DEFAULT_OPTIMIZE_PROMPT,
-        ),
+        "provider_id": CLOUD_PROVIDER_ID,
+        "base_url": DEFAULT_CLOUD_API_BASE_URL,
+        "model": DEFAULT_CLOUD_MODEL,
+        "api_key": "",
+        "optimize_prompt": DEFAULT_OPTIMIZE_PROMPT,
         "optimize_hotkey": values.get("KNOWSAYIN_OPTIMIZE_HOTKEY") or DEFAULT_OPTIMIZE_HOTKEY,
         "undo_hotkey": values.get("KNOWSAYIN_UNDO_HOTKEY") or DEFAULT_UNDO_HOTKEY,
     }
 
 
-def save_model_settings(
-    provider_id: str,
-    base_url: str,
-    model: str,
-    api_key: str,
-    optimize_prompt: str,
+def save_desktop_settings(
     optimize_hotkey: str = DEFAULT_OPTIMIZE_HOTKEY,
     undo_hotkey: str = DEFAULT_UNDO_HOTKEY,
 ) -> None:
     _ensure_env_file()
-    provider = provider_by_id(provider_id)
-    _set_env("KNOWSAYIN_PROVIDER", provider.provider_id)
-    if provider.provider_id == CLOUD_PROVIDER_ID:
-        _set_env("KNOWSAYIN_CLOUD_BASE_URL", _normalize_cloud_base_url(base_url or provider.base_url))
-        _set_env("KNOWSAYIN_CLOUD_MODEL", model.strip() or provider.default_model)
-    else:
-        _set_env("OPENAI_BASE_URL", base_url.strip())
-        _set_env("OPENAI_MODEL", model.strip())
-        _set_env("OPENAI_API_KEY", api_key.strip())
-    _set_env(
-        "KNOWSAYIN_OPTIMIZE_PROMPT",
-        _encode_env_text(optimize_prompt.strip() or DEFAULT_OPTIMIZE_PROMPT),
-    )
+    _set_env("KNOWSAYIN_PROVIDER", CLOUD_PROVIDER_ID)
+    _set_env("KNOWSAYIN_CLOUD_BASE_URL", DEFAULT_CLOUD_API_BASE_URL)
+    _set_env("KNOWSAYIN_CLOUD_MODEL", DEFAULT_CLOUD_MODEL)
     _set_env("KNOWSAYIN_OPTIMIZE_HOTKEY", optimize_hotkey.strip() or DEFAULT_OPTIMIZE_HOTKEY)
     _set_env("KNOWSAYIN_UNDO_HOTKEY", undo_hotkey.strip() or DEFAULT_UNDO_HOTKEY)
     os.chmod(ENV_PATH, 0o600)
@@ -155,89 +81,23 @@ def save_model_settings(
 
 def get_active_model_config() -> ModelConfig:
     data = load_model_settings()
-    provider = provider_by_id(data["provider_id"])
-
     return ModelConfig(
-        provider_id=provider.provider_id,
-        provider_name=provider.name,
-        base_url=data["base_url"].strip(),
-        model=data["model"].strip(),
-        api_key=data["api_key"].strip(),
-        optimize_prompt=data["optimize_prompt"].strip() or DEFAULT_OPTIMIZE_PROMPT,
-        disable_llm=_env_bool("KNOWSAYIN_DISABLE_LLM", False),
+        provider_id=CLOUD_PROVIDER_ID,
+        provider_name="KnowSayin Cloud",
+        base_url=DEFAULT_CLOUD_API_BASE_URL,
+        model=DEFAULT_CLOUD_MODEL,
+        api_key="",
+        optimize_prompt=DEFAULT_OPTIMIZE_PROMPT,
+        disable_llm=False,
     )
-
-
-def load_api_key(provider_id: str | None = None) -> str:
-    return _read_env().get("OPENAI_API_KEY", "")
-
-
-def list_remote_models(base_url: str, api_key: str) -> list[str]:
-    if not base_url.strip():
-        raise RuntimeError("请先填写 Base URL。")
-    if not api_key.strip():
-        raise RuntimeError("请先填写 API key。")
-
-    url = base_url.rstrip("/") + "/models"
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {api_key.strip()}",
-            "Accept": "application/json",
-            "User-Agent": f"{APP_NAME}/{APP_VERSION}",
-        },
-        method="GET",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:
-        raise RuntimeError(f"模型列表读取失败：{exc}") from exc
-
-    model_ids = _extract_model_ids(payload)
-    if not model_ids:
-        raise RuntimeError("没有从接口返回中找到模型 ID。")
-    return model_ids
-
-
-def _extract_model_ids(payload: Any) -> list[str]:
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, list):
-            values = [
-                str(item.get("id"))
-                for item in data
-                if isinstance(item, dict) and item.get("id")
-            ]
-            return sorted(set(values), key=str.lower)
-
-        models = payload.get("models")
-        if isinstance(models, list):
-            values = [
-                str(item.get("id") or item.get("name"))
-                for item in models
-                if isinstance(item, dict) and (item.get("id") or item.get("name"))
-            ]
-            return sorted(set(values), key=str.lower)
-
-    return []
 
 
 def _read_env() -> dict[str, str]:
     values = {key: value or "" for key, value in dotenv_values(ENV_PATH).items()}
     for key in (
-        "KNOWSAYIN_PROVIDER",
-        "KNOWSAYIN_CLOUD_BASE_URL",
-        "KNOWSAYIN_CLOUD_MODEL",
         "KNOWSAYIN_CLOUD_TOKEN",
-        "KNOWSAYIN_OPTIMIZE_PROMPT",
         "KNOWSAYIN_OPTIMIZE_HOTKEY",
         "KNOWSAYIN_UNDO_HOTKEY",
-        "KNOWSAYIN_DISABLE_LLM",
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "OPENAI_MODEL",
     ):
         if os.getenv(key):
             values[key] = os.getenv(key, "")
@@ -273,10 +133,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def PROVID_PRESETS_SAFE() -> tuple[ProviderPreset, ...]:
-    return PROVIDER_PRESETS
-
-
 def load_cloud_session_token() -> str:
     return _read_env().get("KNOWSAYIN_CLOUD_TOKEN", "").strip()
 
@@ -285,12 +141,3 @@ def save_cloud_session_token(token: str) -> None:
     _ensure_env_file()
     _set_env("KNOWSAYIN_CLOUD_TOKEN", token.strip())
     os.chmod(ENV_PATH, 0o600)
-
-
-def _normalize_cloud_base_url(value: str) -> str:
-    normalized = value.strip().rstrip("/")
-    if not normalized:
-        return DEFAULT_CLOUD_API_BASE_URL
-    if normalized.startswith("http://") or normalized.startswith("https://"):
-        return normalized
-    return DEFAULT_CLOUD_API_BASE_URL

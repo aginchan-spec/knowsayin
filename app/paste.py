@@ -96,7 +96,7 @@ def _capture_with_keyboard() -> CapturedText:
     copied = _safe_paste()
     if copied is None or copied == sentinel:
         _restore_clipboard(previous_clipboard)
-        raise RuntimeError("没有读到当前输入框里的文字。先点一下目标输入框，再点浮窗按钮。")
+        raise RuntimeError("Could not read the focused text field. Click the target field first, then click Optimize.")
 
     return CapturedText(text=copied, previous_clipboard=previous_clipboard)
 
