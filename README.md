@@ -12,11 +12,22 @@ cp .env.example .env
 python -m app.main
 ```
 
-启动后会出现一个很小的置顶毛玻璃浮窗，主按钮是 `优化`，旁边有 `撤`、`...` 和 `-`。菜单栏也会出现 `JS`，用于显示浮窗、打开设置或退出。
+启动后会出现一个很小的置顶毛玻璃浮窗，主按钮是 `优化`，旁边有 `撤`、`...` 和 `-`。菜单栏也会出现 `JS`，用于显示浮窗、打开设置、打开授权设置或退出。
+
+打包成双击启动的 macOS App：
+
+```bash
+scripts/build_macos_app.sh
+open "/Applications/Just Saying.app"
+```
+
+macOS 权限会绑定到打包后的 App 身份。打包脚本固定使用 bundle id `com.chris.justsaying`，避免每次构建后系统设置里出现看似已授权、实际不匹配的旧授权项。
+
+打包版会读取 `~/Library/Application Support/Just Saying/.env`。如果这个文件还不存在，打包脚本会从项目目录复制本机 `.env` 过去一次；后续在设置窗口保存，也会写入这个位置。这样双击启动时不需要额外申请 Documents 文件夹权限。
 
 ## 手机网页
 
-手机网页用于给朋友免费试用：打开网页，输入或粘贴文字，点击 `优化`，再复制结果到别处。浏览器不会拿到 DeepSeek API key；网页只请求本机/服务器上的 `app.web`，由后端读取 `.env` 调用模型。
+手机网页用于给朋友免费试用：打开网页，输入或粘贴文字，点击 `优化`，再复制结果到别处；需要重来时点 `清除`。输入框会显示字数，较长文本会自动用长文本整理提示词，完成后页面会跳到结果区。浏览器不会拿到 DeepSeek API key；网页只请求本机/服务器上的 `app.web`，由后端读取 `.env` 调用模型。
 
 本地运行：
 
@@ -58,7 +69,7 @@ JUSTSAYING_WEB_PASSES=anna:随机口令:100:3000:true,ben:另一个随机口令:
 6. 按需要修改优化提示词。
 7. 点 `保存`。
 
-设置会保存到项目根目录的 `.env`。`.env` 不要提交；它包含 API key、Base URL、模型 ID、provider 和自定义优化提示词。
+开发模式下，设置会保存到项目根目录的 `.env`。打包版 App 会保存到 `~/Library/Application Support/Just Saying/.env`。`.env` 不要提交；它包含 API key、Base URL、模型 ID、provider 和自定义优化提示词。
 
 当前内置 OpenAI-compatible provider 预设：
 
@@ -105,7 +116,7 @@ OPENAI_BASE_URL=https://example.com/v1
 自定义优化提示词也会写入 `.env`：
 
 ```bash
-JUSTSAYING_OPTIMIZE_PROMPT=你是一个语音提示词清洗助手。\n输出只包含整理后的 prompt，不要解释。
+JUSTSAYING_OPTIMIZE_PROMPT=You are a voice-to-prompt cleanup assistant.\nRewrite the user's rough spoken text into a clear AI prompt.\nOutput only the cleaned prompt. Do not explain your changes.
 ```
 
 如果没有配置 API key，会使用本地 fallback 清洗逻辑，方便先跑通流程。
@@ -128,7 +139,11 @@ README.md
 
 ## 权限和限制
 
-- macOS 需要给运行 `python -m app.main` 的终端或 Python 授予 Accessibility 权限，否则无法自动 `Cmd+A/C/V`。
+- macOS 需要给 `Just Saying.app`、或运行 `python -m app.main` 的终端/Python 授予 Accessibility 权限，否则无法读取和替换当前输入框文字。
+- 如果授权没做好，Just Saying 会提示你；点菜单栏 `JS` -> `打开授权设置`，然后在 Accessibility 里允许 Just Saying。
+- 如果刚重新打包过 App，授权开关看起来已经打开但仍提示授权，请把旧的 Just Saying 权限移除或重新开关一次，然后完全退出并重新打开 `/Applications/Just Saying.app`。
+- 默认 `Option + Shift` 和三下 `Option` 不需要额外 Input Monitoring。只有把快捷键改成 `option+return`、`command+z` 这类带普通按键的组合时，才可能需要在 Input Monitoring 里允许 Just Saying。
+- macOS 不允许 App 自动替用户勾选权限；第一次安装仍需要用户在系统设置里手动打开开关。
 - 默认 `Option + Shift` 是优化快捷键，默认连续三下 `Option` 是还原快捷键。
 - 快捷键可在设置窗口修改，支持格式如 `option+shift`、`option+space`、`command+z`、`option*3`。
 - 浮窗会记住最后一个非 Just Saying 的前台 App。

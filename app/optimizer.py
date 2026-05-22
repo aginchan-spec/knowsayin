@@ -9,6 +9,7 @@ from .model_config import DEFAULT_OPTIMIZE_PROMPT, ModelConfig, get_active_model
 
 
 Mode = Literal["light", "medium", "strong"]
+LONG_TEXT_THRESHOLD = 800
 
 
 FILLER_PATTERNS = [
@@ -50,20 +51,37 @@ def _optimize_with_openai(text: str, mode: Mode, model_config: ModelConfig) -> s
         temperature=0.2,
         messages=[
             {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": f"请按照系统提示优化以下文本，只输出结果：\n\n{text}",
-            },
+            {"role": "user", "content": _optimize_user_message(text, mode)},
         ],
     )
     result = response.choices[0].message.content or ""
     return result.strip()
 
 
+def _optimize_user_message(text: str, mode: Mode) -> str:
+    if len(text) < LONG_TEXT_THRESHOLD:
+        return f"请按照系统提示优化以下文本，只输出结果：\n\n{text}"
+
+    return "\n".join(
+        [
+            "这是一段较长、可能包含口语化思路流的文本。",
+            "请先在内部识别用户真正想完成的任务、背景、限制、关键细节和输出期待。",
+            "然后只输出一个可以直接复制使用的清晰 prompt。",
+            "不要输出分析过程、摘要标题或多版本选项。",
+            f"整理模式：{mode}",
+            "",
+            text,
+        ]
+    )
+
+
 def fallback_optimize(text: str, mode: Mode) -> str:
     cleaned = _remove_fillers(text)
     cleaned = _collapse_repeated_words(cleaned)
     cleaned = _normalize_spacing(cleaned)
+
+    if len(cleaned) >= LONG_TEXT_THRESHOLD and mode != "light":
+        return _long_text_fallback(cleaned)
 
     if mode == "light":
         return cleaned
@@ -122,6 +140,37 @@ def _strong_fallback(text: str) -> str:
             "Requirements:",
             "- Preserve the original intent.",
             "- Keep the output clear, concise, and actionable.",
+        ]
+    )
+
+
+def _long_text_fallback(text: str) -> str:
+    if _looks_like_cjk(text):
+        return "\n".join(
+            [
+                "请基于以下材料帮我完成任务。",
+                "",
+                "材料：",
+                text,
+                "",
+                "要求：",
+                "- 先理解我的核心意图。",
+                "- 保留重要背景和限制。",
+                "- 输出清晰、结构化、可直接执行。",
+            ]
+        )
+
+    return "\n".join(
+        [
+            "Please help me complete the task based on the material below.",
+            "",
+            "Material:",
+            text,
+            "",
+            "Requirements:",
+            "- Identify my core intent.",
+            "- Preserve important context and constraints.",
+            "- Produce a clear, structured, directly usable result.",
         ]
     )
 

@@ -8,7 +8,9 @@ from dataclasses import dataclass
 import objc
 import pyperclip
 import Quartz
+from ApplicationServices import AXIsProcessTrusted
 from AppKit import (
+    NSAlert,
     NSApp,
     NSApplication,
     NSApplicationActivationPolicyAccessory,
@@ -83,15 +85,27 @@ class JustSayingApp(NSObject):
         self.key_event_tap = None
         self.key_event_source = None
         self.key_event_callback = None
+        self.needs_accessibility = False
+        self.needs_input_monitoring = False
+        self.permission_notice_keys: set[str] = set()
+        self.last_key_tap_attempt = 0.0
         self._reload_hotkeys_from_settings()
         self.buttons: list[NSButton] = []
         self.window = self._build_window()
         self._install_status_item()
+        self._request_accessibility_permission(show_help=True)
         self._install_hotkeys()
         self.tracker = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.25,
             self,
             "trackFrontApp:",
+            None,
+            True,
+        )
+        self.permission_tracker = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            2.0,
+            self,
+            "checkPermissions:",
             None,
             True,
         )
@@ -132,6 +146,9 @@ class JustSayingApp(NSObject):
 
     def showFloatingWindow_(self, sender) -> None:
         self._show_floating_window()
+
+    def openPermissions_(self, sender) -> None:
+        self._open_permission_settings()
 
     def openSettings_(self, sender) -> None:
         self._show_settings_window()
@@ -220,6 +237,7 @@ class JustSayingApp(NSObject):
             return
 
         self._reload_hotkeys_from_settings()
+        self._sync_key_event_tap()
         self._update_hotkey_tooltips()
         self.settings_status.setStringValue_(f"已保存到 {ENV_PATH}。")
         self._set_status(self._ready_status())
@@ -231,6 +249,9 @@ class JustSayingApp(NSObject):
     @objc.python_method
     def _start_optimize(self) -> None:
         if self.busy:
+            return
+        if not AXIsProcessTrusted():
+            self._request_accessibility_permission(show_help=True)
             return
 
         self._set_status("正在读取当前输入框...")
@@ -356,6 +377,7 @@ class JustSayingApp(NSObject):
         for title, action in (
             ("显示浮窗", "showFloatingWindow:"),
             ("设置", "openSettings:"),
+            ("打开授权设置", "openPermissions:"),
         ):
             item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, "")
             item.setTarget_(self)
@@ -382,6 +404,52 @@ class JustSayingApp(NSObject):
         self._set_status(self._ready_status())
 
     @objc.python_method
+    def _request_accessibility_permission(self, show_help: bool = False) -> bool:
+        if AXIsProcessTrusted():
+            self.needs_accessibility = False
+            self._refresh_status_dot()
+            return True
+
+        self.needs_accessibility = True
+        self._set_status("需要 macOS Accessibility 授权。")
+        if show_help:
+            self._show_permission_notice(
+                "accessibility",
+                "Just Saying 需要一次授权",
+                "请在 macOS Accessibility / 辅助功能 里打开 Just Saying。若开关已经打开但仍提示授权，通常是旧构建残留；请重新添加 /Applications/Just Saying.app，授权后完全退出并重新打开。",
+            )
+        return False
+
+    @objc.python_method
+    def _open_permission_settings(self, kind: str = "all") -> None:
+        import subprocess
+
+        urls = []
+        if kind in {"all", "accessibility"}:
+            urls.append("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        if kind in {"all", "input"}:
+            urls.append("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+        if not urls:
+            urls.append("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        for url in urls:
+            subprocess.run(["open", url], check=False)
+
+    @objc.python_method
+    def _show_permission_notice(self, key: str, title: str, message: str) -> None:
+        if key in self.permission_notice_keys:
+            return
+        self.permission_notice_keys.add(key)
+        try:
+            NSApp.activateIgnoringOtherApps_(True)
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_(title)
+            alert.setInformativeText_(message)
+            alert.addButtonWithTitle_("知道了")
+            alert.runModal()
+        except Exception:
+            pass
+
+    @objc.python_method
     def _install_hotkeys(self) -> None:
         mask = _appkit_constant("NSEventMaskFlagsChanged", "NSFlagsChangedMask")
 
@@ -397,7 +465,10 @@ class JustSayingApp(NSObject):
             NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(mask, global_handler),
             NSEvent.addLocalMonitorForEventsMatchingMask_handler_(mask, local_handler),
         ]
-        self._install_key_event_tap()
+        if self._needs_key_event_tap():
+            self._install_key_event_tap(show_notice=True)
+        else:
+            self._remove_key_event_tap()
 
     @objc.python_method
     def _reload_hotkeys_from_settings(self) -> None:
@@ -423,7 +494,44 @@ class JustSayingApp(NSObject):
             self.undo_button.setToolTip_(f"Undo：{self.undo_hotkey.raw}")
 
     @objc.python_method
-    def _install_key_event_tap(self) -> None:
+    def _needs_key_event_tap(self) -> bool:
+        return self.optimize_hotkey.kind == "key" or self.undo_hotkey.kind == "key"
+
+    @objc.python_method
+    def _sync_key_event_tap(self) -> None:
+        if self._needs_key_event_tap():
+            self._install_key_event_tap(show_notice=True)
+        else:
+            self._remove_key_event_tap()
+
+    @objc.python_method
+    def _remove_key_event_tap(self) -> None:
+        if self.key_event_tap is None:
+            return
+        try:
+            Quartz.CGEventTapEnable(self.key_event_tap, False)
+            if self.key_event_source is not None:
+                Quartz.CFRunLoopRemoveSource(
+                    Quartz.CFRunLoopGetCurrent(),
+                    self.key_event_source,
+                    Quartz.kCFRunLoopCommonModes,
+                )
+        except Exception:
+            pass
+        self.key_event_tap = None
+        self.key_event_source = None
+        self.key_event_callback = None
+        self.needs_input_monitoring = False
+
+    @objc.python_method
+    def _install_key_event_tap(self, show_notice: bool = False) -> None:
+        if not self._needs_key_event_tap():
+            self._remove_key_event_tap()
+            return
+        if self.key_event_tap is not None:
+            return
+
+        self.last_key_tap_attempt = time.monotonic()
         event_mask = 1 << Quartz.kCGEventKeyDown
 
         def key_event_callback(proxy, event_type, event, refcon):
@@ -455,9 +563,17 @@ class JustSayingApp(NSObject):
             None,
         )
         if self.key_event_tap is None:
-            self._set_status("无法启用全局快捷键。请检查 Accessibility / Input Monitoring 权限。")
+            self.needs_input_monitoring = True
+            self._set_status("普通按键快捷键需要 Input Monitoring 授权。")
+            if show_notice:
+                self._show_permission_notice(
+                    "input-monitoring",
+                    "快捷键需要输入监听权限",
+                    "请在 macOS Input Monitoring / 输入监听 里打开 Just Saying；也可以把快捷键改回 option+shift 来避免这个权限。",
+                )
             return
 
+        self.needs_input_monitoring = False
         self.key_event_source = Quartz.CFMachPortCreateRunLoopSource(
             None,
             self.key_event_tap,
@@ -469,6 +585,22 @@ class JustSayingApp(NSObject):
             Quartz.kCFRunLoopCommonModes,
         )
         Quartz.CGEventTapEnable(self.key_event_tap, True)
+
+    def checkPermissions_(self, timer) -> None:
+        had_warning = self.needs_accessibility or self.needs_input_monitoring
+        if self.needs_accessibility and AXIsProcessTrusted():
+            self.needs_accessibility = False
+
+        if self._needs_key_event_tap() and self.key_event_tap is None:
+            if time.monotonic() - self.last_key_tap_attempt >= 5.0:
+                self._install_key_event_tap(show_notice=False)
+        elif not self._needs_key_event_tap():
+            self.needs_input_monitoring = False
+
+        has_warning = self.needs_accessibility or self.needs_input_monitoring
+        self._refresh_status_dot()
+        if had_warning and not has_warning and not self.busy:
+            self._set_status(self._ready_status())
 
     @objc.python_method
     def _key_hotkey_action(self, event_type, event) -> str | None:
@@ -770,7 +902,9 @@ class JustSayingApp(NSObject):
         if not hasattr(self, "status_dot"):
             return
         model_config = get_active_model_config()
-        if model_config.llm_enabled:
+        if self.needs_accessibility or self.needs_input_monitoring:
+            color = NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.26, 0.23, 0.95)
+        elif model_config.llm_enabled:
             color = NSColor.colorWithCalibratedRed_green_blue_alpha_(0.20, 0.90, 0.58, 0.95)
         else:
             color = NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.67, 0.25, 0.90)

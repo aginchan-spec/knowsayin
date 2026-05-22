@@ -306,8 +306,8 @@ class JustSayingWebHandler(BaseHTTPRequestHandler):
             "short_name": "Just Saying",
             "start_url": f"{base_path or '/'}/".replace("//", "/"),
             "display": "standalone",
-            "background_color": "#f7f5ef",
-            "theme_color": "#f7f5ef",
+            "background_color": "#080a0d",
+            "theme_color": "#080a0d",
             "icons": [],
         }
         self._send_bytes(

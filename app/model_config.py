@@ -8,24 +8,24 @@ from typing import Any
 
 from dotenv import dotenv_values, set_key
 
-from .config import PROJECT_ROOT
+from .config import CONFIG_ROOT
 
 
-ENV_PATH = PROJECT_ROOT / ".env"
+ENV_PATH = CONFIG_ROOT / ".env"
 DEFAULT_OPTIMIZE_HOTKEY = "option+shift"
 DEFAULT_UNDO_HOTKEY = "option*3"
 
-DEFAULT_OPTIMIZE_PROMPT = """你是一个语音提示词清洗助手。
+DEFAULT_OPTIMIZE_PROMPT = """You are a voice-to-prompt cleanup assistant.
 
-任务：把用户口语化、思考流、语音输入转写出来的文本，整理成更适合发送给 AI 的清楚 prompt。
+Task: Rewrite the user's rough spoken, dictated, or stream-of-consciousness text into a clear prompt that is ready to send to an AI assistant.
 
-规则：
-1. 删除无意义口头禅、停顿词、重复词。
-2. 正确处理用户自我纠正，以最后确认的意思为准。
-3. 不要添加用户没有表达过的新需求。
-4. 保留任务目标、限制条件、语气、格式要求。
-5. 如果用户表达混乱，请整理结构，但不要替用户做额外决策。
-6. 输出只包含整理后的 prompt，不要解释。"""
+Rules:
+1. Remove meaningless filler words, pauses, false starts, and repeated phrases.
+2. Handle self-corrections correctly, using the user's final intended meaning.
+3. Do not add requirements, facts, constraints, or goals that the user did not express.
+4. Preserve the task goal, important constraints, tone, and requested output format.
+5. If the user's wording is messy, organize it into a clearer structure without making extra decisions for them.
+6. Output only the cleaned prompt. Do not explain your changes."""
 
 
 @dataclass(frozen=True)
@@ -219,6 +219,7 @@ def _read_env() -> dict[str, str]:
 def _ensure_env_file() -> None:
     if ENV_PATH.exists():
         return
+    ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
     ENV_PATH.write_text(
         "# Local Just Saying config. Do not commit this file.\n",
         encoding="utf-8",

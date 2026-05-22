@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="robots" content="noindex,nofollow" />
-    <meta name="theme-color" content="#f7f5ef" />
+    <meta name="theme-color" content="#080a0d" />
     <title>Just Saying</title>
     <link rel="manifest" href="__BASE_PATH__/manifest.webmanifest" />
     <link rel="stylesheet" href="__BASE_PATH__/static/styles.css" />
@@ -13,8 +13,7 @@
     <main class="app-shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Just Saying</p>
-          <h1>提示词优化</h1>
+          <h1>Just Saying</h1>
         </div>
         <div class="quota" id="quota">今日剩余 -</div>
       </header>
@@ -28,7 +27,10 @@
       </section>
 
       <section class="editor">
-        <label for="sourceText">原文</label>
+        <div class="field-meta">
+          <label for="sourceText">原文</label>
+          <span id="charCount">0 / 3000</span>
+        </div>
         <textarea
           id="sourceText"
           autofocus
@@ -37,18 +39,22 @@
         ></textarea>
       </section>
 
+      <div class="primary-actions">
+        <button id="optimizeButton" class="primary" type="button">优化</button>
+      </div>
+
       <section class="editor result-editor">
         <label for="resultText">结果</label>
         <textarea id="resultText" readonly placeholder="优化后的 prompt 会出现在这里"></textarea>
       </section>
 
+      <div class="secondary-actions">
+        <button id="copyButton" type="button" disabled>复制结果</button>
+        <button id="clearButton" type="button">清除</button>
+      </div>
+
       <p class="status" id="status" role="status" aria-live="polite"></p>
     </main>
-
-    <footer class="action-bar">
-      <button id="optimizeButton" class="primary" type="button">优化</button>
-      <button id="copyButton" type="button" disabled>复制结果</button>
-    </footer>
 
     <script>
       window.JUSTSAYING_BASE_PATH = "__BASE_PATH__";

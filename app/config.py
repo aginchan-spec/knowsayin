@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(PROJECT_ROOT / ".env")
+PROJECT_ROOT = Path(
+    os.getenv("JUSTSAYING_PROJECT_ROOT") or Path(__file__).resolve().parents[1],
+)
+APP_SUPPORT_ROOT = Path.home() / "Library" / "Application Support" / "Just Saying"
+CONFIG_ROOT = Path(
+    os.getenv("JUSTSAYING_CONFIG_ROOT")
+    or (APP_SUPPORT_ROOT if getattr(sys, "frozen", False) else PROJECT_ROOT),
+)
+load_dotenv(CONFIG_ROOT / ".env")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
