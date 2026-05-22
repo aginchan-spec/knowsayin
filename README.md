@@ -1,28 +1,99 @@
-# justsaying
+# Just Saying Desktop V1
 
-A voice-input prompt cleaner for turning spoken thinking-flow text into concise, usable AI prompts.
+Just Saying 是一个桌面浮窗工具：先在目标对话框里输入口语化文字，再点浮窗里的 `优化`，它会原地把当前输入框内容改写成更清楚的 prompt。
 
-## Product Idea
+语音转文字交给系统输入法或豆包输入法；Just Saying 只负责清洗、整理和强化 prompt。
 
-Voice input often includes filler words, repeated phrases, false starts, and self-corrections. justsaying sits between speech-to-text and an AI model, helping turn raw transcript text into a clearer prompt before sending.
+## 运行
 
-Core principle:
-
-```text
-Clean expression, do not change intent.
-Organize structure, do not silently decide for the user.
+```bash
+pip install -r requirements.txt
+cp .env.example .env
+python -m app.main
 ```
 
-## Initial Modes
+启动后会出现一个很小的置顶毛玻璃浮窗，主按钮只有 `优化`，旁边的 `...` 打开设置。
 
-- **Clean**: remove obvious filler and repetition while preserving phrasing.
-- **Organize**: rewrite the transcript into a concise, clear request.
-- **Strengthen**: turn the intent into a structured prompt with task, context, constraints, and output format.
+## 模型设置
 
-## Privacy
+点击浮窗里的 `...`：
 
-Treat transcripts as private by default. Do not commit raw private recordings, private transcripts, API keys, tokens, or credentials.
+1. 选择 provider。
+2. 粘贴 API key；如果 `Cmd+V` 没反应，点 API Key 右侧的 `粘贴`。
+3. 点 `寻找模型`。
+4. 从搜索结果里选择模型，或手动填写模型 ID。
+5. 按需要修改优化提示词。
+6. 点 `保存`。
 
-## Project Memory
+设置会保存到项目根目录的 `.env`。`.env` 不要提交；它包含 API key、Base URL、模型 ID、provider 和自定义优化提示词。
 
-Before work, read `AGENTS.md`, then `MemoryBank/projects/justsaying.md`.
+当前内置 OpenAI-compatible provider 预设：
+
+- OpenAI
+- OpenRouter
+- DeepSeek
+- Groq
+- Mistral
+- Together AI
+- xAI
+- Moonshot
+- Qwen / DashScope
+- Doubao / Volcano Ark
+- Custom OpenAI-compatible
+
+## 使用流程
+
+1. 在 ChatGPT、Claude、浏览器、微信或其他目标输入框里输入一段文字。
+2. 如果想整理，点击 Just Saying 浮窗里的 `优化`。
+3. Just Saying 会切回你刚才使用的目标 App，优先用 macOS Accessibility 直接读取和替换当前文本；不支持时再退回 `Cmd+A/C/V`。
+4. 确认没问题后，在原应用里正常提交。
+
+## 配置
+
+推荐使用浮窗里的设置窗口写入 `.env`。也可以手动编辑：
+
+```bash
+JUSTSAYING_PROVIDER=openai
+OPENAI_API_KEY=你的 key
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4.1-nano
+```
+
+兼容 OpenAI API 的服务可以改 `OPENAI_BASE_URL`，例如：
+
+```bash
+OPENAI_BASE_URL=https://example.com/v1
+```
+
+自定义优化提示词也会写入 `.env`：
+
+```bash
+JUSTSAYING_OPTIMIZE_PROMPT=你是一个语音提示词清洗助手。\n输出只包含整理后的 prompt，不要解释。
+```
+
+如果没有配置 API key，会使用本地 fallback 清洗逻辑，方便先跑通流程。
+
+## 文件结构
+
+```text
+app/
+  __init__.py
+  config.py
+  main.py
+  model_config.py
+  optimizer.py
+  paste.py
+.env.example
+.gitignore
+requirements.txt
+README.md
+```
+
+## 权限和限制
+
+- macOS 需要给运行 `python -m app.main` 的终端或 Python 授予 Accessibility 权限，否则无法自动 `Cmd+A/C/V`。
+- 浮窗会记住最后一个非 Just Saying 的前台 App。
+- 当前版本优先使用 Accessibility 直接读写焦点文本元素；如果目标 App 不暴露可写文本值，则退回快捷键方式。
+- 目标 App 需要能在重新激活后保留输入框焦点；如果网页或 App 特殊处理焦点，仍可能读不到文字。
+- 只恢复文本剪贴板内容；如果原剪贴板是图片或富文本，当前版本不会完整还原。
+- prompt 内容和语音内容不会落盘；API key 只保存到你本机项目目录里的 `.env`。
