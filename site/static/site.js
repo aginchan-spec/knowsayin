@@ -21,6 +21,14 @@ const LANG = detectLanguage();
 const COPY = {
   en: {
     headline: "From brain dump to brilliant prompt.",
+    headlineSub:
+      "Desktop app: type roughly in any chat box, press Option + Shift, and KnowSayin rewrites it in place.",
+    desktopKicker: "Desktop instant prompt cleanup",
+    desktopLead:
+      "No tab switching, no copy-paste loop. Draft your thought in the chat box, then optimize it in place.",
+    desktopStepDraft: "Draft in the chat box",
+    desktopStepTrigger: "Click Optimize or press Option + Shift",
+    desktopStepReplace: "It rewrites the prompt right there",
     getExtraEyebrow: "Get extra",
     extraTitle: "Send the author a nice note to refill for free",
     extraSubmit: "Send and refill",
@@ -54,6 +62,12 @@ const COPY = {
   },
   zh: {
     headline: "你负责想，它负责写。",
+    headlineSub: "电脑版：在 ChatGPT、Claude 或任何对话框里随便写，按 Option + Shift，当场变成清楚 prompt。",
+    desktopKicker: "电脑版即时优化",
+    desktopLead: "不用切换页面，不用复制粘贴。你在当前输入框把想法说完，KnowSayin 直接原地改好。",
+    desktopStepDraft: "在对话框里随便写",
+    desktopStepTrigger: "点击 Optimize 或按 Option + Shift",
+    desktopStepReplace: "当场变成清楚 prompt",
     getExtraEyebrow: "补额度",
     extraTitle: "选一句好话送给作者，免费补满额度",
     extraSubmit: "送出并补额度",

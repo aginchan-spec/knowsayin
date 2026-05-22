@@ -14,13 +14,32 @@
   <body>
     <main class="app-shell">
       <header class="topbar">
-        <h1 id="pageTitle" data-i18n="headline">From brain dump to brilliant prompt.</h1>
+        <div class="headline-block">
+          <h1 id="pageTitle" data-i18n="headline">From brain dump to brilliant prompt.</h1>
+          <p class="headline-sub" data-i18n="headlineSub">
+            Desktop app: type roughly in any chat box, press Option + Shift, and KnowSayin rewrites it in place.
+          </p>
+        </div>
         <div class="top-actions">
           <a href="/download" id="downloadLink">Download</a>
           <a href="#" id="githubLink">GitHub</a>
           <div class="quota" id="quotaLine">Quota -</div>
         </div>
       </header>
+
+      <section class="desktop-strip" aria-labelledby="desktopTitle">
+        <div>
+          <p class="eyebrow" id="desktopTitle" data-i18n="desktopKicker">Desktop instant prompt cleanup</p>
+          <p class="desktop-lead" data-i18n="desktopLead">
+            No tab switching, no copy-paste loop. Draft your thought in the chat box, then optimize it in place.
+          </p>
+        </div>
+        <div class="instant-steps" aria-label="Desktop app steps">
+          <span data-i18n="desktopStepDraft">Draft in the chat box</span>
+          <span data-i18n="desktopStepTrigger">Click Optimize or press Option + Shift</span>
+          <span data-i18n="desktopStepReplace">It rewrites the prompt right there</span>
+        </div>
+      </section>
 
       <section class="extra-panel" id="extraPanel" aria-labelledby="extraTitle" hidden>
         <div class="extra-head">
