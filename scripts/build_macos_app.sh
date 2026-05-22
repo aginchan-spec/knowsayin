@@ -3,14 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-APP_NAME="Just Saying"
-BUNDLE_ID="com.chris.justsaying"
-BUILD_DIR="/tmp/justsaying-build"
-DIST_DIR="/tmp/justsaying-dist"
-WORK_DIR="/tmp/justsaying-pyinstaller"
-INSTALL_DIR="${JUSTSAYING_INSTALL_DIR:-/Applications}"
-CONFIG_DIR="${JUSTSAYING_CONFIG_DIR:-$HOME/Library/Application Support/Just Saying}"
-PYINSTALLER="${JUSTSAYING_PYINSTALLER:-$HOME/Library/Python/3.9/bin/pyinstaller}"
+APP_NAME="KnowSayin"
+BUNDLE_ID="com.knowsayin.app"
+BUILD_DIR="/tmp/knowsayin-build"
+DIST_DIR="/tmp/knowsayin-dist"
+WORK_DIR="/tmp/knowsayin-pyinstaller"
+INSTALL_DIR="${KNOWSAYIN_INSTALL_DIR:-${JUSTSAYING_INSTALL_DIR:-/Applications}}"
+CONFIG_DIR="${KNOWSAYIN_CONFIG_DIR:-$HOME/Library/Application Support/KnowSayin}"
+OLD_CONFIG_DIR="$HOME/Library/Application Support/Just Saying"
+PYINSTALLER="${KNOWSAYIN_PYINSTALLER:-${JUSTSAYING_PYINSTALLER:-$HOME/Library/Python/3.9/bin/pyinstaller}}"
 
 if [[ ! -x "$PYINSTALLER" ]]; then
   PYINSTALLER="pyinstaller"
@@ -18,7 +19,7 @@ fi
 
 mkdir -p "$BUILD_DIR" "$INSTALL_DIR"
 
-ENTRY_FILE="$BUILD_DIR/justsaying_app_entry.py"
+ENTRY_FILE="$BUILD_DIR/knowsayin_app_entry.py"
 python3 - "$ENTRY_FILE" <<'PY'
 from pathlib import Path
 import sys
@@ -54,6 +55,9 @@ xattr -dr com.apple.quarantine "$INSTALL_DIR/$APP_NAME.app" 2>/dev/null || true
 mkdir -p "$CONFIG_DIR"
 if [[ -f "$PROJECT_DIR/.env" && ! -f "$CONFIG_DIR/.env" ]]; then
   cp -p "$PROJECT_DIR/.env" "$CONFIG_DIR/.env"
+  chmod 600 "$CONFIG_DIR/.env"
+elif [[ -f "$OLD_CONFIG_DIR/.env" && ! -f "$CONFIG_DIR/.env" ]]; then
+  cp -p "$OLD_CONFIG_DIR/.env" "$CONFIG_DIR/.env"
   chmod 600 "$CONFIG_DIR/.env"
 fi
 

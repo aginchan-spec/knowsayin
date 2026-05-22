@@ -1,0 +1,19 @@
+[Unit]
+Description=KnowSayin API relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/dnachan/Desktop/justsaying
+Environment=PYTHONUNBUFFERED=1
+Environment=KNOWSAYIN_API_DATA_PATH=/home/dnachan/.local/state/knowsayin/cloud-usage.json
+EnvironmentFile=-/home/dnachan/.config/knowsayin/api.env
+ExecStart=/home/dnachan/Desktop/justsaying/.venv/bin/python -m app.cloud_api --host 127.0.0.1 --port 8788
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

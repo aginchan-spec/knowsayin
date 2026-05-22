@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-SENTINEL_PREFIX = "__JUSTSAYING_EMPTY_"
+SENTINEL_PREFIX = "__KNOWSAYIN_EMPTY_"
 
 
 @dataclass(frozen=True)

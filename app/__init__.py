@@ -1,1 +1,1 @@
-"""Just Saying desktop prompt cleaner."""
+"""KnowSayin desktop prompt cleaner."""

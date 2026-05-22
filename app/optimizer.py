@@ -5,6 +5,7 @@ from typing import Literal
 
 from openai import OpenAI
 
+from .cloud_client import clean_prompt_with_cloud
 from .model_config import DEFAULT_OPTIMIZE_PROMPT, ModelConfig, get_active_model_config
 
 
@@ -29,6 +30,9 @@ def optimize_prompt(
         return ""
 
     model_config = app_settings or get_active_model_config()
+
+    if model_config.is_cloud and model_config.llm_enabled:
+        return clean_prompt_with_cloud(normalized, mode, model_config.base_url)
 
     if not model_config.llm_enabled:
         return fallback_optimize(normalized, mode)

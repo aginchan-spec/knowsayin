@@ -10,8 +10,8 @@ const passPanel = document.querySelector("#passPanel");
 const passInput = document.querySelector("#passInput");
 const savePassButton = document.querySelector("#savePassButton");
 
-const PASS_KEY = "justsaying.friendPass";
-const BASE_PATH = window.JUSTSAYING_BASE_PATH || "";
+const PASS_KEY = "knowsayin.friendPass";
+const BASE_PATH = window.KNOWSAYIN_BASE_PATH || window.JUSTSAYING_BASE_PATH || "";
 const LONG_TEXT_THRESHOLD = 800;
 
 function apiPath(path) {

@@ -15,3 +15,7 @@ recordings/
 transcripts/private/
 .justsaying-web-usage.json
 .justsaying-web-usage.tmp
+.knowsayin-cloud-usage.json
+.knowsayin-cloud-usage.tmp
+.knowsayin-web-usage.json
+.knowsayin-web-usage.tmp

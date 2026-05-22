@@ -40,6 +40,10 @@ from Foundation import NSAttributedString, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
 from .model_config import (
+    APP_NAME,
+    APP_VERSION,
+    CLOUD_PROVIDER_ID,
+    DEFAULT_CLOUD_MODEL,
     ENV_PATH,
     DEFAULT_OPTIMIZE_HOTKEY,
     DEFAULT_OPTIMIZE_PROMPT,
@@ -153,12 +157,24 @@ class JustSayingApp(NSObject):
     def openSettings_(self, sender) -> None:
         self._show_settings_window()
 
+    def checkUpdate_(self, sender) -> None:
+        self._set_status("正在检查 KnowSayin 更新...")
+        threading.Thread(target=self._check_update_worker, daemon=True).start()
+
     def settingsProviderChanged_(self, sender) -> None:
         provider = provider_by_name(str(self.provider_popup.titleOfSelectedItem()))
         self.base_url_field.setStringValue_(provider.base_url)
         self.model_field.setStringValue_(provider.default_model)
         self.model_popup.removeAllItems()
-        self.settings_status.setStringValue_("切换 provider 后，填写 API key 并寻找模型。")
+        if provider.provider_id == CLOUD_PROVIDER_ID:
+            self.api_key_field.setStringValue_("")
+            self.api_key_field.setEnabled_(False)
+            self.api_key_field.setPlaceholderString_("KnowSayin Cloud 不需要本机 API key")
+            self.settings_status.setStringValue_("KnowSayin Cloud 默认连接 https://api.knowsayin.com。")
+        else:
+            self.api_key_field.setEnabled_(True)
+            self.api_key_field.setPlaceholderString_("保存后写入本地 .env")
+            self.settings_status.setStringValue_("切换 provider 后，填写 API key 并寻找模型。")
 
     def settingsModelChanged_(self, sender) -> None:
         selected = self.model_popup.titleOfSelectedItem()
@@ -182,6 +198,13 @@ class JustSayingApp(NSObject):
             return
 
         provider = provider_by_name(str(self.provider_popup.titleOfSelectedItem()))
+        if provider.provider_id == CLOUD_PROVIDER_ID:
+            self.model_popup.removeAllItems()
+            self.model_popup.addItemWithTitle_(provider.default_model or DEFAULT_CLOUD_MODEL)
+            self.model_field.setStringValue_(provider.default_model or DEFAULT_CLOUD_MODEL)
+            self.settings_status.setStringValue_("KnowSayin Cloud 使用服务器固定模型，不需要寻找模型。")
+            return
+
         base_url = str(self.base_url_field.stringValue()).strip()
         api_key = str(self.api_key_field.stringValue()).strip() or load_api_key(
             provider.provider_id,
@@ -370,13 +393,14 @@ class JustSayingApp(NSObject):
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(length)
         button = self.status_item.button()
         if button is not None:
-            button.setTitle_("JS")
-            button.setToolTip_("Just Saying")
+            button.setTitle_("KS")
+            button.setToolTip_(APP_NAME)
 
-        menu = NSMenu.alloc().initWithTitle_("Just Saying")
+        menu = NSMenu.alloc().initWithTitle_(APP_NAME)
         for title, action in (
             ("显示浮窗", "showFloatingWindow:"),
             ("设置", "openSettings:"),
+            ("检查更新", "checkUpdate:"),
             ("打开授权设置", "openPermissions:"),
         ):
             item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, "")
@@ -415,8 +439,8 @@ class JustSayingApp(NSObject):
         if show_help:
             self._show_permission_notice(
                 "accessibility",
-                "Just Saying 需要一次授权",
-                "请在 macOS Accessibility / 辅助功能 里打开 Just Saying。若开关已经打开但仍提示授权，通常是旧构建残留；请重新添加 /Applications/Just Saying.app，授权后完全退出并重新打开。",
+                "KnowSayin 需要一次授权",
+                "请在 macOS Accessibility / 辅助功能 里打开 KnowSayin。若开关已经打开但仍提示授权，通常是旧构建残留；请重新添加 /Applications/KnowSayin.app，授权后完全退出并重新打开。",
             )
         return False
 
@@ -443,6 +467,36 @@ class JustSayingApp(NSObject):
             NSApp.activateIgnoringOtherApps_(True)
             alert = NSAlert.alloc().init()
             alert.setMessageText_(title)
+            alert.setInformativeText_(message)
+            alert.addButtonWithTitle_("知道了")
+            alert.runModal()
+        except Exception:
+            pass
+
+    @objc.python_method
+    def _check_update_worker(self) -> None:
+        try:
+            from .cloud_client import get_cloud_config
+
+            model_config = get_active_model_config()
+            config = get_cloud_config(model_config.base_url)
+            latest = str(config.get("latestVersion") or APP_VERSION)
+            download_url = str(config.get("downloadUrl") or "https://knowsayin.com/download")
+            if latest == APP_VERSION:
+                message = f"当前版本 {APP_VERSION} 已是最新。"
+            else:
+                message = f"当前版本 {APP_VERSION}，最新版本 {latest}。请到 {download_url} 下载新版。"
+            AppHelper.callAfter(self._show_update_notice, message)
+        except Exception as exc:
+            AppHelper.callAfter(self._show_update_notice, f"更新检查失败：{exc}")
+
+    @objc.python_method
+    def _show_update_notice(self, message: str) -> None:
+        self._set_status(message)
+        try:
+            NSApp.activateIgnoringOtherApps_(True)
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_("KnowSayin 更新")
             alert.setInformativeText_(message)
             alert.addButtonWithTitle_("知道了")
             alert.runModal()
@@ -569,7 +623,7 @@ class JustSayingApp(NSObject):
                 self._show_permission_notice(
                     "input-monitoring",
                     "快捷键需要输入监听权限",
-                    "请在 macOS Input Monitoring / 输入监听 里打开 Just Saying；也可以把快捷键改回 option+shift 来避免这个权限。",
+                    "请在 macOS Input Monitoring / 输入监听 里打开 KnowSayin；也可以把快捷键改回 option+shift 来避免这个权限。",
                 )
             return
 
@@ -760,6 +814,8 @@ class JustSayingApp(NSObject):
     def _ready_status(self) -> str:
         target = f"目标：{self.target_name}" if self.target_name else "先点目标输入框"
         model_config = get_active_model_config()
+        if model_config.is_cloud:
+            return f"就绪：KnowSayin Cloud | {target}"
         if model_config.llm_enabled:
             return f"就绪：{model_config.provider_name} / {model_config.model} | {target}"
         return f"就绪：未配置模型，使用本地基础清洗 | {target}"
@@ -935,7 +991,7 @@ class JustSayingApp(NSObject):
             NSBackingStoreBuffered,
             False,
         )
-        window.setTitle_("Just Saying 设置")
+        window.setTitle_("KnowSayin 设置")
         window.setFloatingPanel_(True)
         window.setHidesOnDeactivate_(False)
 
@@ -1034,6 +1090,12 @@ class JustSayingApp(NSObject):
         self.base_url_field.setStringValue_(data["base_url"] or provider.base_url)
         self.model_field.setStringValue_(data["model"] or provider.default_model)
         self.api_key_field.setStringValue_(data["api_key"] or "")
+        if provider.provider_id == CLOUD_PROVIDER_ID:
+            self.api_key_field.setEnabled_(False)
+            self.api_key_field.setPlaceholderString_("KnowSayin Cloud 不需要本机 API key")
+        else:
+            self.api_key_field.setEnabled_(True)
+            self.api_key_field.setPlaceholderString_("保存后写入本地 .env")
         self.optimize_hotkey_field.setStringValue_(data["optimize_hotkey"] or DEFAULT_OPTIMIZE_HOTKEY)
         self.undo_hotkey_field.setStringValue_(data["undo_hotkey"] or DEFAULT_UNDO_HOTKEY)
         self.prompt_text_view.setString_(data["optimize_prompt"] or DEFAULT_OPTIMIZE_PROMPT)
@@ -1236,14 +1298,14 @@ def _install_edit_menu(app) -> None:
     main_menu = NSMenu.alloc().initWithTitle_("")
 
     app_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Just Saying",
+        APP_NAME,
         None,
         "",
     )
     main_menu.addItem_(app_menu_item)
-    app_menu = NSMenu.alloc().initWithTitle_("Just Saying")
+    app_menu = NSMenu.alloc().initWithTitle_(APP_NAME)
     app_menu_item.setSubmenu_(app_menu)
-    app_menu.addItemWithTitle_action_keyEquivalent_("Quit Just Saying", "terminate:", "q")
+    app_menu.addItemWithTitle_action_keyEquivalent_("Quit KnowSayin", "terminate:", "q")
 
     edit_menu_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
         "Edit",

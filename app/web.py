@@ -19,7 +19,7 @@ from .optimizer import optimize_prompt
 
 
 WEB_ROOT = PROJECT_ROOT / "web"
-USAGE_PATH = PROJECT_ROOT / ".justsaying-web-usage.json"
+USAGE_PATH = PROJECT_ROOT / ".knowsayin-web-usage.json"
 MAX_BODY_BYTES = 96 * 1024
 
 
@@ -56,28 +56,28 @@ usage_lock = threading.RLock()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Just Saying mobile web app.")
+    parser = argparse.ArgumentParser(description="Run the KnowSayin mobile web app.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8787, type=int)
     parser.add_argument("--make-pass", metavar="LABEL", help="Generate a friend pass config line.")
     parser.add_argument("--daily-limit", default=100, type=int)
     parser.add_argument("--max-chars", default=3000, type=int)
-    parser.add_argument("--base-url", default="https://mehelper.com/justsaying")
+    parser.add_argument("--base-url", default="https://knowsayin.com")
     args = parser.parse_args()
 
     if args.make_pass:
         token = secrets.token_urlsafe(24)
-        print(f"JUSTSAYING_WEB_PASSES='{args.make_pass}:{token}:{args.daily_limit}:{args.max_chars}:true'")
+        print(f"KNOWSAYIN_WEB_PASSES='{args.make_pass}:{token}:{args.daily_limit}:{args.max_chars}:true'")
         print(f"Friend link: {args.base_url.rstrip('/')}/p/{token}")
         return
 
     server = ThreadingHTTPServer((args.host, args.port), JustSayingWebHandler)
-    print(f"Just Saying web running at http://{args.host}:{args.port}")
+    print(f"KnowSayin web running at http://{args.host}:{args.port}")
     server.serve_forever()
 
 
 class JustSayingWebHandler(BaseHTTPRequestHandler):
-    server_version = "JustSayingWeb/0.1"
+    server_version = "KnowSayinWeb/0.1"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -302,8 +302,8 @@ class JustSayingWebHandler(BaseHTTPRequestHandler):
 
     def _send_manifest(self, base_path: str) -> None:
         body = {
-            "name": "Just Saying",
-            "short_name": "Just Saying",
+            "name": "KnowSayin",
+            "short_name": "KnowSayin",
             "start_url": f"{base_path or '/'}/".replace("//", "/"),
             "display": "standalone",
             "background_color": "#080a0d",
@@ -342,19 +342,23 @@ def _load_web_settings() -> WebSettings:
     from os import getenv
 
     return WebSettings(
-        require_pass=_env_bool("JUSTSAYING_WEB_REQUIRE_PASS", True),
-        default_daily_limit=_env_int("JUSTSAYING_WEB_DEFAULT_DAILY_LIMIT", 100),
-        default_max_chars=_env_int("JUSTSAYING_WEB_DEFAULT_MAX_CHARS", 3000),
-        global_daily_limit=_env_int("JUSTSAYING_WEB_GLOBAL_DAILY_LIMIT", 1000),
-        site_url=getenv("JUSTSAYING_WEB_SITE_URL", "https://mehelper.com/justsaying").strip(),
-        base_path=_normalize_base_path(getenv("JUSTSAYING_WEB_BASE_PATH", "/justsaying")),
+        require_pass=_env_bool("KNOWSAYIN_WEB_REQUIRE_PASS", _env_bool("JUSTSAYING_WEB_REQUIRE_PASS", True)),
+        default_daily_limit=_env_int("KNOWSAYIN_WEB_DEFAULT_DAILY_LIMIT", _env_int("JUSTSAYING_WEB_DEFAULT_DAILY_LIMIT", 100)),
+        default_max_chars=_env_int("KNOWSAYIN_WEB_DEFAULT_MAX_CHARS", _env_int("JUSTSAYING_WEB_DEFAULT_MAX_CHARS", 3000)),
+        global_daily_limit=_env_int("KNOWSAYIN_WEB_GLOBAL_DAILY_LIMIT", _env_int("JUSTSAYING_WEB_GLOBAL_DAILY_LIMIT", 1000)),
+        site_url=(
+            getenv("KNOWSAYIN_WEB_SITE_URL")
+            or getenv("JUSTSAYING_WEB_SITE_URL")
+            or "https://knowsayin.com"
+        ).strip(),
+        base_path=_normalize_base_path(getenv("KNOWSAYIN_WEB_BASE_PATH") or getenv("JUSTSAYING_WEB_BASE_PATH") or ""),
     )
 
 
 def _load_passes(settings: WebSettings) -> dict[str, PassConfig]:
     from os import getenv
 
-    raw = getenv("JUSTSAYING_WEB_PASSES", "").strip()
+    raw = (getenv("KNOWSAYIN_WEB_PASSES") or getenv("JUSTSAYING_WEB_PASSES") or "").strip()
     if not raw:
         return {} if settings.require_pass else {}
 

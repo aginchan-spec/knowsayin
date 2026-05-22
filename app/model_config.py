@@ -12,6 +12,12 @@ from .config import CONFIG_ROOT
 
 
 ENV_PATH = CONFIG_ROOT / ".env"
+APP_NAME = "KnowSayin"
+APP_VERSION = "0.1.0"
+OLD_APP_NAME = "Just Saying"
+CLOUD_PROVIDER_ID = "knowsayin"
+DEFAULT_CLOUD_API_BASE_URL = "https://api.knowsayin.com"
+DEFAULT_CLOUD_MODEL = "knowsayin-cloud"
 DEFAULT_OPTIMIZE_HOTKEY = "option+shift"
 DEFAULT_UNDO_HOTKEY = "option*3"
 
@@ -37,6 +43,7 @@ class ProviderPreset:
 
 
 PROVIDER_PRESETS: tuple[ProviderPreset, ...] = (
+    ProviderPreset(CLOUD_PROVIDER_ID, "KnowSayin Cloud", DEFAULT_CLOUD_API_BASE_URL, DEFAULT_CLOUD_MODEL),
     ProviderPreset("openai", "OpenAI", "https://api.openai.com/v1", "gpt-4.1-nano"),
     ProviderPreset("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4.1-nano"),
     ProviderPreset("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
@@ -62,11 +69,17 @@ class ModelConfig:
     disable_llm: bool = False
 
     @property
+    def is_cloud(self) -> bool:
+        return self.provider_id == CLOUD_PROVIDER_ID
+
+    @property
     def api_key_configured(self) -> bool:
         return bool(self.api_key.strip())
 
     @property
     def llm_enabled(self) -> bool:
+        if self.is_cloud:
+            return bool(self.base_url.strip()) and not self.disable_llm
         return self.api_key_configured and bool(self.model.strip()) and not self.disable_llm
 
 
@@ -90,18 +103,32 @@ def provider_by_name(name: str) -> ProviderPreset:
 
 def load_model_settings() -> dict[str, str]:
     values = _read_env()
-    provider_id = values.get("JUSTSAYING_PROVIDER") or "openai"
+    provider_id = values.get("KNOWSAYIN_PROVIDER") or values.get("JUSTSAYING_PROVIDER") or CLOUD_PROVIDER_ID
     provider = provider_by_id(provider_id)
+    if provider.provider_id == CLOUD_PROVIDER_ID:
+        base_url = values.get("KNOWSAYIN_CLOUD_BASE_URL") or provider.base_url
+        model = values.get("KNOWSAYIN_CLOUD_MODEL") or provider.default_model
+        api_key = ""
+    else:
+        base_url = values.get("OPENAI_BASE_URL") or provider.base_url
+        model = values.get("OPENAI_MODEL") or provider.default_model
+        api_key = values.get("OPENAI_API_KEY") or ""
     return {
         "provider_id": provider.provider_id,
-        "base_url": values.get("OPENAI_BASE_URL") or provider.base_url,
-        "model": values.get("OPENAI_MODEL") or provider.default_model,
-        "api_key": values.get("OPENAI_API_KEY") or "",
+        "base_url": base_url,
+        "model": model,
+        "api_key": api_key,
         "optimize_prompt": _decode_env_text(
-            values.get("JUSTSAYING_OPTIMIZE_PROMPT") or DEFAULT_OPTIMIZE_PROMPT,
+            values.get("KNOWSAYIN_OPTIMIZE_PROMPT")
+            or values.get("JUSTSAYING_OPTIMIZE_PROMPT")
+            or DEFAULT_OPTIMIZE_PROMPT,
         ),
-        "optimize_hotkey": values.get("JUSTSAYING_OPTIMIZE_HOTKEY") or DEFAULT_OPTIMIZE_HOTKEY,
-        "undo_hotkey": values.get("JUSTSAYING_UNDO_HOTKEY") or DEFAULT_UNDO_HOTKEY,
+        "optimize_hotkey": values.get("KNOWSAYIN_OPTIMIZE_HOTKEY")
+        or values.get("JUSTSAYING_OPTIMIZE_HOTKEY")
+        or DEFAULT_OPTIMIZE_HOTKEY,
+        "undo_hotkey": values.get("KNOWSAYIN_UNDO_HOTKEY")
+        or values.get("JUSTSAYING_UNDO_HOTKEY")
+        or DEFAULT_UNDO_HOTKEY,
     }
 
 
@@ -115,16 +142,21 @@ def save_model_settings(
     undo_hotkey: str = DEFAULT_UNDO_HOTKEY,
 ) -> None:
     _ensure_env_file()
-    _set_env("JUSTSAYING_PROVIDER", provider_id)
-    _set_env("OPENAI_BASE_URL", base_url.strip())
-    _set_env("OPENAI_MODEL", model.strip())
-    _set_env("OPENAI_API_KEY", api_key.strip())
+    provider = provider_by_id(provider_id)
+    _set_env("KNOWSAYIN_PROVIDER", provider.provider_id)
+    if provider.provider_id == CLOUD_PROVIDER_ID:
+        _set_env("KNOWSAYIN_CLOUD_BASE_URL", _normalize_cloud_base_url(base_url or provider.base_url))
+        _set_env("KNOWSAYIN_CLOUD_MODEL", model.strip() or provider.default_model)
+    else:
+        _set_env("OPENAI_BASE_URL", base_url.strip())
+        _set_env("OPENAI_MODEL", model.strip())
+        _set_env("OPENAI_API_KEY", api_key.strip())
     _set_env(
-        "JUSTSAYING_OPTIMIZE_PROMPT",
+        "KNOWSAYIN_OPTIMIZE_PROMPT",
         _encode_env_text(optimize_prompt.strip() or DEFAULT_OPTIMIZE_PROMPT),
     )
-    _set_env("JUSTSAYING_OPTIMIZE_HOTKEY", optimize_hotkey.strip() or DEFAULT_OPTIMIZE_HOTKEY)
-    _set_env("JUSTSAYING_UNDO_HOTKEY", undo_hotkey.strip() or DEFAULT_UNDO_HOTKEY)
+    _set_env("KNOWSAYIN_OPTIMIZE_HOTKEY", optimize_hotkey.strip() or DEFAULT_OPTIMIZE_HOTKEY)
+    _set_env("KNOWSAYIN_UNDO_HOTKEY", undo_hotkey.strip() or DEFAULT_UNDO_HOTKEY)
     os.chmod(ENV_PATH, 0o600)
 
 
@@ -139,12 +171,12 @@ def get_active_model_config() -> ModelConfig:
         model=data["model"].strip(),
         api_key=data["api_key"].strip(),
         optimize_prompt=data["optimize_prompt"].strip() or DEFAULT_OPTIMIZE_PROMPT,
-        disable_llm=_env_bool("JUSTSAYING_DISABLE_LLM", False),
+        disable_llm=_env_bool("KNOWSAYIN_DISABLE_LLM", _env_bool("JUSTSAYING_DISABLE_LLM", False)),
     )
 
 
 def load_api_key(provider_id: str | None = None) -> str:
-    return load_model_settings().get("api_key", "")
+    return _read_env().get("OPENAI_API_KEY", "")
 
 
 def list_remote_models(base_url: str, api_key: str) -> list[str]:
@@ -159,7 +191,7 @@ def list_remote_models(base_url: str, api_key: str) -> list[str]:
         headers={
             "Authorization": f"Bearer {api_key.strip()}",
             "Accept": "application/json",
-            "User-Agent": "JustSaying/0.1",
+            "User-Agent": f"{APP_NAME}/{APP_VERSION}",
         },
         method="GET",
     )
@@ -202,6 +234,14 @@ def _extract_model_ids(payload: Any) -> list[str]:
 def _read_env() -> dict[str, str]:
     values = {key: value or "" for key, value in dotenv_values(ENV_PATH).items()}
     for key in (
+        "KNOWSAYIN_PROVIDER",
+        "KNOWSAYIN_CLOUD_BASE_URL",
+        "KNOWSAYIN_CLOUD_MODEL",
+        "KNOWSAYIN_CLOUD_TOKEN",
+        "KNOWSAYIN_OPTIMIZE_PROMPT",
+        "KNOWSAYIN_OPTIMIZE_HOTKEY",
+        "KNOWSAYIN_UNDO_HOTKEY",
+        "KNOWSAYIN_DISABLE_LLM",
         "JUSTSAYING_PROVIDER",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
@@ -221,7 +261,7 @@ def _ensure_env_file() -> None:
         return
     ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
     ENV_PATH.write_text(
-        "# Local Just Saying config. Do not commit this file.\n",
+        "# Local KnowSayin config. Do not commit this file.\n",
         encoding="utf-8",
     )
 
@@ -247,3 +287,22 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 def PROVID_PRESETS_SAFE() -> tuple[ProviderPreset, ...]:
     return PROVIDER_PRESETS
+
+
+def load_cloud_session_token() -> str:
+    return _read_env().get("KNOWSAYIN_CLOUD_TOKEN", "").strip()
+
+
+def save_cloud_session_token(token: str) -> None:
+    _ensure_env_file()
+    _set_env("KNOWSAYIN_CLOUD_TOKEN", token.strip())
+    os.chmod(ENV_PATH, 0o600)
+
+
+def _normalize_cloud_base_url(value: str) -> str:
+    normalized = value.strip().rstrip("/")
+    if not normalized:
+        return DEFAULT_CLOUD_API_BASE_URL
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        return normalized
+    return DEFAULT_CLOUD_API_BASE_URL

@@ -1,7 +1,7 @@
 {
-  "name": "Just Saying",
-  "short_name": "Just Saying",
-  "start_url": "/justsaying/",
+  "name": "KnowSayin",
+  "short_name": "KnowSayin",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#080a0d",
   "theme_color": "#080a0d",
