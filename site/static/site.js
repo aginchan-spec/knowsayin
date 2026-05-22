@@ -20,7 +20,7 @@ const LANG = detectLanguage();
 
 const COPY = {
   en: {
-    headline: "Refine a rough prompt",
+    headline: "From brain dump to brilliant prompt.",
     getExtraEyebrow: "Get extra",
     extraTitle: "Send the author a nice note to refill for free",
     extraSubmit: "Send and refill",
@@ -53,7 +53,7 @@ const COPY = {
     linkedMachine: "Machine code loaded. Pick a nice note for the author to refill.",
   },
   zh: {
-    headline: "整理粗糙 prompt",
+    headline: "你负责想，它负责写。",
     getExtraEyebrow: "补额度",
     extraTitle: "选一句好话送给作者，免费补满额度",
     extraSubmit: "送出并补额度",
