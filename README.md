@@ -1,35 +1,12 @@
-# KnowSayin Desktop V1
+# KnowSayin
 
-KnowSayin 是一个桌面浮窗工具：先在目标对话框里输入口语化文字，再点浮窗里的 `Optimize`，它会原地把当前输入框内容改写成更清楚的 prompt。
+KnowSayin turns rough dictated notes, stream-of-consciousness text, or messy first drafts into clearer prompts.
 
-语音转文字交给系统输入法或豆包输入法；KnowSayin 只负责清洗、整理和强化 prompt。
+It is a macOS desktop helper plus a lightweight web cleaner at [knowsayin.com](https://knowsayin.com). The app uses the hosted KnowSayin service; users do not need to deploy a server, choose a model provider, or bring an API key.
 
-## 默认云服务
+## Download
 
-默认 provider 是 `KnowSayin Cloud`，客户端固定连接：
-
-```text
-https://api.knowsayin.com
-```
-
-不要把 VM101、AWS EC2、内网 host、临时 tunnel 或机器 IP 写进客户端配置。以后从 VM101 迁移到 EC2 时，只切换 Cloudflare DNS/反代，已安装软件仍然请求同一个 `api.knowsayin.com`。
-
-KnowSayin Cloud API 使用版本化路径：
-
-```text
-GET  /v1/health
-GET  /v1/config
-POST /v1/session
-POST /v1/usage
-POST /v1/clean
-POST /v1/grant
-```
-
-客户端不会携带 DeepSeek API key。DeepSeek key 只放在服务器环境变量里。
-
-## 从 GitHub 安装 macOS 桌面版
-
-如果 repo 还是 private，先确认本机 GitHub 已登录并有访问权限；公开发布给用户前，建议把安装仓库改成 public，或提供下载包。
+Early macOS builds are installed from this repository:
 
 ```bash
 git clone https://github.com/aginchan-spec/knowsayin.git
@@ -38,17 +15,43 @@ scripts/install_macos.sh
 open "/Applications/KnowSayin.app"
 ```
 
-安装脚本会在仓库内创建 `.venv`，不会把依赖装进全局 Python；如果 `.env` 不存在，会从 `.env.example` 初始化一次。
+This installs the desktop client only. Optimization still runs through KnowSayin Cloud.
 
-首次打开后，到 macOS：
+On first launch, enable macOS Accessibility permission for `KnowSayin.app`:
 
 ```text
 System Settings -> Privacy & Security -> Accessibility
 ```
 
-给 `KnowSayin.app` 打开权限。没有 Accessibility 权限时，App 可以启动，但无法读取和替换目标输入框文字。
+Without Accessibility permission, the app can open, but it cannot read or replace text in the active input field.
 
-## 运行桌面版开发模式
+## How It Works
+
+1. Type or dictate rough text into ChatGPT, Claude, a browser, a note app, or another text field.
+2. Click `Optimize` in the small floating window, or press `Option + Shift`.
+3. KnowSayin replaces the current text with a cleaner prompt.
+4. Click `Undo`, or press `Option` three times, to restore the previous text.
+5. If the floating window is hidden, restore it from the macOS menu bar item `KS -> Show Floating Window`.
+
+Free quota starts at 20 uses and refills automatically. When quota is empty, `Optimize` changes to `Get extra`; it opens the KnowSayin website with the machine code already included. Choose a nice note for the author, submit it, and the quota refills for free.
+
+## Web Cleaner
+
+The website at [knowsayin.com](https://knowsayin.com) can also clean prompts directly in the browser. Paste text, optimize it, then copy the result.
+
+The page automatically follows the browser/system language for English or Chinese interface text.
+
+## Privacy
+
+- The desktop client does not store raw prompt text, voice recordings, or private transcripts.
+- KnowSayin Cloud processes submitted text only to return the cleaned prompt.
+- Usage accounting is based on quota and character counts, not saved prompt contents.
+- The desktop client does not include provider API keys.
+- Never commit `.env`, private recordings, private transcripts, API keys, tokens, or credentials.
+
+## Local Client Development
+
+For contributors working on the macOS client:
 
 ```bash
 python3 -m venv .venv
@@ -58,136 +61,25 @@ test -f .env || cp .env.example .env
 python -m app.main
 ```
 
-启动后会出现一个很小的置顶毛玻璃浮窗：左侧是额度、隐藏和 `Undo`，右侧是 `Optimize`。`Optimize` 按钮为绿色表示云端已连线且 macOS 权限已授权；红色表示未连线或未授权。免费额度用完时，`Optimize` 会变成 `Get extra`，点击打开 KnowSayin 网站并自动带上本机机器码。隐藏后可从菜单栏 `KS -> Show Floating Window` 恢复。
-
-打包成双击启动的 macOS App：
+Build and install the macOS app locally:
 
 ```bash
 scripts/build_macos_app.sh
 open "/Applications/KnowSayin.app"
 ```
 
-打包脚本固定使用 bundle id `com.knowsayin.app`。打包版读取 `~/Library/Application Support/KnowSayin/.env`；如果这个文件不存在，会从项目 `.env` 初始化一次。
+The bundle id is `com.knowsayin.app`. Local ad-hoc builds may need Accessibility permission again after rebuilding. Public release builds should use a stable Developer ID signature and notarization.
 
-开发机如果没有配置 `KNOWSAYIN_CODESIGN_IDENTITY`，打包脚本会生成 ad-hoc signed app。ad-hoc 包每次重打后 macOS Accessibility 授权都可能失效；正式发给用户的更新包必须用同一个 Apple Developer ID Application 证书签名并 notarize：
+## Notes For Contributors
 
-```bash
-KNOWSAYIN_CODESIGN_IDENTITY="Developer ID Application: Your Company (TEAMID)" \
-  scripts/build_macos_app.sh
-```
+- The supported user setup is the official hosted KnowSayin service.
+- Self-hosting is not a public user workflow and is not documented here.
+- Production infrastructure, deployment units, machine names, internal paths, private environment files, and service secrets are intentionally kept out of the public repository.
+- The active desktop configuration is fixed to `KnowSayin Cloud`; users should not be asked to configure their own API provider, base URL, model ID, or API key.
 
-## 运行 VM101/API 中转服务
+## Requirements And Limits
 
-在服务器环境文件中配置真实密钥，不要写入 repo：
-
-```bash
-KNOWSAYIN_API_ALLOWED_ORIGINS=https://knowsayin.com
-KNOWSAYIN_API_QUOTA_CAPACITY=20
-KNOWSAYIN_API_QUOTA_REFILL_SECONDS=300
-KNOWSAYIN_API_TOKEN_SECRET=replace-with-random-server-secret
-KNOWSAYIN_API_GRANT_SECRET=replace-with-random-grant-secret
-KNOWSAYIN_UPSTREAM_BASE_URL=https://api.deepseek.com/v1
-KNOWSAYIN_UPSTREAM_MODEL=deepseek-chat
-KNOWSAYIN_UPSTREAM_API_KEY=
-KNOWSAYIN_EXTRA_URL=https://knowsayin.com
-```
-
-本地或服务器启动：
-
-```bash
-python -m app.cloud_api --host 127.0.0.1 --port 8788
-```
-
-生产环境由 Cloudflare/反代把 `https://api.knowsayin.com` 转发到这个服务。迁移到 AWS EC2 时，在 EC2 部署同版本服务并切换 `api.knowsayin.com`，旧客户端无需更新。
-
-## 运行根网站
-
-根网站服务用于 `https://knowsayin.com` 和 `https://www.knowsayin.com`。首页就是可用的 prompt cleaner：可以直接粘贴文本优化，也可以承接桌面端 `Get extra` 跳转，用户选一句固定的赞美后免费补满额度。
-
-本地启动：
-
-```bash
-python -m app.site --host 127.0.0.1 --port 8789
-```
-
-服务器环境示例：
-
-```bash
-KNOWSAYIN_SITE_PUBLIC_URL=https://knowsayin.com
-KNOWSAYIN_SITE_API_BASE_URL=https://api.knowsayin.com
-KNOWSAYIN_INTERNAL_API_BASE_URL=http://127.0.0.1:8788
-KNOWSAYIN_SITE_DOWNLOAD_URL=https://github.com/aginchan-spec/knowsayin
-KNOWSAYIN_API_GRANT_SECRET=replace-with-random-grant-secret
-```
-
-生产建议由独立 user service 运行：
-
-```text
-deploy/systemd/user/knowsayin-site.service
-```
-
-Cloudflare Tunnel 目标：
-
-```text
-knowsayin.com     -> http://127.0.0.1:8789
-www.knowsayin.com -> http://127.0.0.1:8789
-api.knowsayin.com -> http://127.0.0.1:8788
-```
-
-`POST /api/extra` 是公开网页入口，只接收机器码和固定赞美选项。网站服务会在服务端读取 `KNOWSAYIN_API_GRANT_SECRET`，再调用内部 `/v1/grant` 补满对应机器码的免费额度。浏览器 JavaScript、桌面客户端和公开网页都不能拿到 grant secret。
-
-## 手机网页
-
-手机网页用于轻量试用：打开网页，输入或粘贴文字，点击 `优化`，再复制结果到别处；需要重来时点 `清除`。输入框会显示字数，较长文本会自动用长文本整理提示词。
-
-本地运行：
-
-```bash
-python -m app.web --host 127.0.0.1 --port 8787
-```
-
-生成朋友专属链接配置：
-
-```bash
-python -m app.web --make-pass Anna --daily-limit 100 --max-chars 3000 --base-url https://knowsayin.com
-```
-
-使用记录只保存每日次数和字符数，不保存原文和优化结果。
-
-## 桌面设置
-
-点击浮窗里的额度按钮，或从 macOS 菜单栏 `KS -> Settings` 打开设置：
-
-1. 桌面版固定使用 `KnowSayin Cloud`，不支持用户填写自己的 API key、Base URL 或模型 ID。
-2. 设置窗口会显示当前 Cloud endpoint 和匿名剩余额度。免费额度最多 20 个，用掉后每 5 分钟恢复 1 个。
-3. 按需要修改优化快捷键和还原快捷键。
-4. 点 `Save`。
-
-如果云服务不可用、额度耗尽或上游失败，桌面版不会用低质量 fallback 静默替换原文；它会显示错误并保留用户输入。额度耗尽时，点击 `Get extra` 打开网站，选一句好话后免费补满额度。
-
-## 使用流程
-
-1. 在 ChatGPT、Claude、浏览器、微信或其他目标输入框里输入一段文字。
-2. 点击 KnowSayin 浮窗里的 `Optimize`，或按 `Option + Shift`。
-3. KnowSayin 会切回目标 App，优先用 macOS Accessibility 直接读取和替换当前文本；不支持时再退回 `Cmd+A/C/V`。
-4. 如果想撤回最近一次优化，点击 `Undo`，或连续按三下 `Option`。
-5. 需要恢复浮窗时，从 macOS 菜单栏 `KS` 里点 `Show Floating Window`。
-
-## 配置示例
-
-```bash
-KNOWSAYIN_PROVIDER=knowsayin
-KNOWSAYIN_CLOUD_BASE_URL=https://api.knowsayin.com
-KNOWSAYIN_CLOUD_MODEL=knowsayin-cloud
-KNOWSAYIN_OPTIMIZE_HOTKEY=option+shift
-KNOWSAYIN_UNDO_HOTKEY=option*3
-```
-
-## 权限和限制
-
-- macOS 需要给 `KnowSayin.app`、或运行 `python -m app.main` 的终端/Python 授予 Accessibility 权限，否则无法读取和替换当前输入框文字。
-- bundle id 是 `com.knowsayin.app`。重新打包或迁移机器后，macOS 可能要求重新授权一次。
-- 默认 `Option + Shift` 和三下 `Option` 不需要额外 Input Monitoring。
-- 目标 App 需要能在重新激活后保留输入框焦点；如果网页或 App 特殊处理焦点，仍可能读不到文字。
-- 只恢复文本剪贴板内容；如果原剪贴板是图片或富文本，当前版本不会完整还原。
-- prompt 内容和语音内容不会落盘；云 API 日志也不保存原文或优化结果。
+- macOS is currently required for the desktop client.
+- The active target app must keep focus in the input field when KnowSayin switches back to it.
+- If an app blocks direct text replacement, KnowSayin falls back to clipboard-based replacement where possible.
+- Only text clipboard contents are restored after replacement; images or rich clipboard data may not be fully restored.

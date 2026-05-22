@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+AGENTS.md
+deploy/
 *.local
 .venv/
 venv/

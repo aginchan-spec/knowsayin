@@ -8,7 +8,7 @@ VENV_DIR="${KNOWSAYIN_VENV_DIR:-$PROJECT_DIR/.venv}"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || true)}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "This installer is for macOS. For server/web usage, see README.md." >&2
+  echo "This installer builds the macOS desktop client only." >&2
   exit 1
 fi
 

@@ -321,10 +321,13 @@ def _load_settings() -> SiteSettings:
     download_url = (
         os.getenv("KNOWSAYIN_SITE_DOWNLOAD_URL")
         or os.getenv("KNOWSAYIN_DOWNLOAD_URL")
-        or github_url
+        or _github_download_section_url(github_url)
     ).strip()
-    if _is_self_download_url(download_url, public_url):
-        download_url = github_url
+    if _is_self_download_url(download_url, public_url) or _same_url_without_fragment(
+        download_url,
+        github_url,
+    ):
+        download_url = _github_download_section_url(github_url)
 
     return SiteSettings(
         public_url=public_url,
@@ -344,6 +347,28 @@ def _is_self_download_url(download_url: str, public_url: str) -> bool:
         and download.netloc == public.netloc
         and download.path.rstrip("/") == "/download"
     )
+
+
+def _same_url_without_fragment(left: str, right: str) -> bool:
+    left_parts = urlparse(left)
+    right_parts = urlparse(right)
+    return (
+        left_parts.scheme,
+        left_parts.netloc,
+        left_parts.path.rstrip("/"),
+        left_parts.params,
+        left_parts.query,
+    ) == (
+        right_parts.scheme,
+        right_parts.netloc,
+        right_parts.path.rstrip("/"),
+        right_parts.params,
+        right_parts.query,
+    )
+
+
+def _github_download_section_url(github_url: str) -> str:
+    return f"{github_url.split('#', 1)[0].rstrip('/')}#download"
 
 
 def _post_internal_json(
