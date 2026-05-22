@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#101418" />
+    <title>KnowSayin</title>
+    <meta
+      name="description"
+      content="KnowSayin cleans dictated thinking-flow text into concise prompts while preserving intent."
+    />
+    <link rel="stylesheet" href="/static/site.css" />
+  </head>
+  <body>
+    <main>
+      <section class="hero" aria-labelledby="heroTitle">
+        <div class="scene" aria-hidden="true">
+          <div class="scene-layer scene-layer-back"></div>
+          <div class="transcript transcript-raw">
+            <span class="line wide"></span>
+            <span class="line"></span>
+            <span class="line short"></span>
+            <span class="phrase">uh, wait, I mean...</span>
+          </div>
+          <div class="transcript transcript-clean">
+            <span class="badge">Clean prompt</span>
+            <span class="line wide"></span>
+            <span class="line medium"></span>
+            <span class="line"></span>
+          </div>
+          <div class="floating-app">
+            <span class="quota-pill">8 left</span>
+            <span class="optimize-pill">Optimize</span>
+            <span class="undo-pill">Undo</span>
+          </div>
+        </div>
+
+        <header class="site-nav" aria-label="Primary navigation">
+          <a class="brand" href="/" aria-label="KnowSayin home">KnowSayin</a>
+          <nav>
+            <a href="#upgrade">Upgrade</a>
+            <a href="/download" id="downloadLink">Download</a>
+            <a href="#" id="githubLink">GitHub</a>
+          </nav>
+        </header>
+
+        <div class="hero-content">
+          <div class="hero-copy">
+            <p class="eyebrow">Voice prompt cleaner for Mac</p>
+            <h1 id="heroTitle">KnowSayin</h1>
+            <p class="lede">
+              Turn dictated thinking-flow text into clear, compact prompts before it reaches your AI app.
+            </p>
+          </div>
+
+          <section class="upgrade-tool" id="upgrade" aria-labelledby="upgradeTitle">
+            <div class="tool-head">
+              <p class="eyebrow">Upgrade this Mac</p>
+              <h2 id="upgradeTitle">Activate your machine code</h2>
+            </div>
+            <form id="checkoutForm" novalidate>
+              <label for="machineCode">Machine code</label>
+              <div class="code-row">
+                <input
+                  id="machineCode"
+                  name="machineCode"
+                  autocomplete="off"
+                  inputmode="latin"
+                  maxlength="16"
+                  placeholder="ABCDEFGH"
+                  spellcheck="false"
+                />
+                <button id="copyCodeButton" class="icon-button" type="button" aria-label="Copy machine code">
+                  Copy
+                </button>
+              </div>
+              <button class="primary-button" id="checkoutButton" type="submit">Continue to upgrade</button>
+            </form>
+            <p class="status" id="statusLine" role="status" aria-live="polite"></p>
+          </section>
+        </div>
+      </section>
+
+      <section class="info-band" aria-label="Product highlights">
+        <article>
+          <h2>Clean expression</h2>
+          <p>Removes filler, repetition, and false starts without quietly changing what you meant.</p>
+        </article>
+        <article>
+          <h2>Desktop first</h2>
+          <p>Type or dictate in the app you already use, then replace the rough text in place.</p>
+        </article>
+        <article>
+          <h2>Private by default</h2>
+          <p>No recordings or raw transcripts are stored by the desktop app or website.</p>
+        </article>
+      </section>
+    </main>
+
+    <script src="/static/site.js"></script>
+  </body>
+</html>

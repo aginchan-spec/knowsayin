@@ -100,6 +100,43 @@ python -m app.cloud_api --host 127.0.0.1 --port 8788
 
 生产环境由 Cloudflare/反代把 `https://api.knowsayin.com` 转发到这个服务。迁移到 AWS EC2 时，在 EC2 部署同版本服务并切换 `api.knowsayin.com`，旧客户端无需更新。
 
+## 运行根网站
+
+根网站服务用于 `https://knowsayin.com` 和 `https://www.knowsayin.com`。它和朋友测试用的手机网页是两个入口：根网站负责下载、升级和机器码激活入口；手机网页负责粘贴文本后优化。
+
+本地启动：
+
+```bash
+python -m app.site --host 127.0.0.1 --port 8789
+```
+
+服务器环境示例：
+
+```bash
+KNOWSAYIN_SITE_PUBLIC_URL=https://knowsayin.com
+KNOWSAYIN_SITE_API_BASE_URL=https://api.knowsayin.com
+KNOWSAYIN_INTERNAL_API_BASE_URL=http://127.0.0.1:8788
+KNOWSAYIN_SITE_DOWNLOAD_URL=https://github.com/aginchan-spec/knowsayin
+KNOWSAYIN_SITE_CHECKOUT_URL=
+KNOWSAYIN_SITE_ADMIN_TOKEN=
+```
+
+生产建议由独立 user service 运行：
+
+```text
+deploy/systemd/user/knowsayin-site.service
+```
+
+Cloudflare Tunnel 目标：
+
+```text
+knowsayin.com     -> http://127.0.0.1:8789
+www.knowsayin.com -> http://127.0.0.1:8789
+api.knowsayin.com -> http://127.0.0.1:8788
+```
+
+`POST /api/admin/activate` 只给受信任的服务端流程或临时人工激活使用，必须带 `KNOWSAYIN_SITE_ADMIN_TOKEN`，并由网站服务在服务端读取 `KNOWSAYIN_API_ACTIVATION_SECRET` 后调用内部 `/v1/activate`。浏览器 JavaScript、桌面客户端和公开网页都不能拿到 activation secret。
+
 ## 手机网页
 
 手机网页用于轻量试用：打开网页，输入或粘贴文字，点击 `优化`，再复制结果到别处；需要重来时点 `清除`。输入框会显示字数，较长文本会自动用长文本整理提示词。
