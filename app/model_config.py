@@ -14,7 +14,6 @@ from .config import CONFIG_ROOT
 ENV_PATH = CONFIG_ROOT / ".env"
 APP_NAME = "KnowSayin"
 APP_VERSION = "0.1.0"
-OLD_APP_NAME = "Just Saying"
 CLOUD_PROVIDER_ID = "knowsayin"
 DEFAULT_CLOUD_API_BASE_URL = "https://api.knowsayin.com"
 DEFAULT_CLOUD_MODEL = "knowsayin-cloud"
@@ -103,7 +102,7 @@ def provider_by_name(name: str) -> ProviderPreset:
 
 def load_model_settings() -> dict[str, str]:
     values = _read_env()
-    provider_id = values.get("KNOWSAYIN_PROVIDER") or values.get("JUSTSAYING_PROVIDER") or CLOUD_PROVIDER_ID
+    provider_id = values.get("KNOWSAYIN_PROVIDER") or CLOUD_PROVIDER_ID
     provider = provider_by_id(provider_id)
     if provider.provider_id == CLOUD_PROVIDER_ID:
         base_url = values.get("KNOWSAYIN_CLOUD_BASE_URL") or provider.base_url
@@ -119,16 +118,10 @@ def load_model_settings() -> dict[str, str]:
         "model": model,
         "api_key": api_key,
         "optimize_prompt": _decode_env_text(
-            values.get("KNOWSAYIN_OPTIMIZE_PROMPT")
-            or values.get("JUSTSAYING_OPTIMIZE_PROMPT")
-            or DEFAULT_OPTIMIZE_PROMPT,
+            values.get("KNOWSAYIN_OPTIMIZE_PROMPT") or DEFAULT_OPTIMIZE_PROMPT,
         ),
-        "optimize_hotkey": values.get("KNOWSAYIN_OPTIMIZE_HOTKEY")
-        or values.get("JUSTSAYING_OPTIMIZE_HOTKEY")
-        or DEFAULT_OPTIMIZE_HOTKEY,
-        "undo_hotkey": values.get("KNOWSAYIN_UNDO_HOTKEY")
-        or values.get("JUSTSAYING_UNDO_HOTKEY")
-        or DEFAULT_UNDO_HOTKEY,
+        "optimize_hotkey": values.get("KNOWSAYIN_OPTIMIZE_HOTKEY") or DEFAULT_OPTIMIZE_HOTKEY,
+        "undo_hotkey": values.get("KNOWSAYIN_UNDO_HOTKEY") or DEFAULT_UNDO_HOTKEY,
     }
 
 
@@ -171,7 +164,7 @@ def get_active_model_config() -> ModelConfig:
         model=data["model"].strip(),
         api_key=data["api_key"].strip(),
         optimize_prompt=data["optimize_prompt"].strip() or DEFAULT_OPTIMIZE_PROMPT,
-        disable_llm=_env_bool("KNOWSAYIN_DISABLE_LLM", _env_bool("JUSTSAYING_DISABLE_LLM", False)),
+        disable_llm=_env_bool("KNOWSAYIN_DISABLE_LLM", False),
     )
 
 
@@ -242,14 +235,9 @@ def _read_env() -> dict[str, str]:
         "KNOWSAYIN_OPTIMIZE_HOTKEY",
         "KNOWSAYIN_UNDO_HOTKEY",
         "KNOWSAYIN_DISABLE_LLM",
-        "JUSTSAYING_PROVIDER",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "OPENAI_MODEL",
-        "JUSTSAYING_OPTIMIZE_PROMPT",
-        "JUSTSAYING_OPTIMIZE_HOTKEY",
-        "JUSTSAYING_UNDO_HOTKEY",
-        "JUSTSAYING_DISABLE_LLM",
     ):
         if os.getenv(key):
             values[key] = os.getenv(key, "")

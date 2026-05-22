@@ -8,13 +8,17 @@ BUNDLE_ID="com.knowsayin.app"
 BUILD_DIR="/tmp/knowsayin-build"
 DIST_DIR="/tmp/knowsayin-dist"
 WORK_DIR="/tmp/knowsayin-pyinstaller"
-INSTALL_DIR="${KNOWSAYIN_INSTALL_DIR:-${JUSTSAYING_INSTALL_DIR:-/Applications}}"
+INSTALL_DIR="${KNOWSAYIN_INSTALL_DIR:-/Applications}"
 CONFIG_DIR="${KNOWSAYIN_CONFIG_DIR:-$HOME/Library/Application Support/KnowSayin}"
-OLD_CONFIG_DIR="$HOME/Library/Application Support/Just Saying"
-PYINSTALLER="${KNOWSAYIN_PYINSTALLER:-${JUSTSAYING_PYINSTALLER:-$HOME/Library/Python/3.9/bin/pyinstaller}}"
+PYINSTALLER="${KNOWSAYIN_PYINSTALLER:-$(command -v pyinstaller || true)}"
 
 if [[ ! -x "$PYINSTALLER" ]]; then
-  PYINSTALLER="pyinstaller"
+  PYINSTALLER="$HOME/Library/Python/3.9/bin/pyinstaller"
+fi
+
+if [[ ! -x "$PYINSTALLER" ]]; then
+  echo "pyinstaller not found. Run: python3 -m pip install -r requirements.txt" >&2
+  exit 1
 fi
 
 mkdir -p "$BUILD_DIR" "$INSTALL_DIR"
@@ -55,9 +59,6 @@ xattr -dr com.apple.quarantine "$INSTALL_DIR/$APP_NAME.app" 2>/dev/null || true
 mkdir -p "$CONFIG_DIR"
 if [[ -f "$PROJECT_DIR/.env" && ! -f "$CONFIG_DIR/.env" ]]; then
   cp -p "$PROJECT_DIR/.env" "$CONFIG_DIR/.env"
-  chmod 600 "$CONFIG_DIR/.env"
-elif [[ -f "$OLD_CONFIG_DIR/.env" && ! -f "$CONFIG_DIR/.env" ]]; then
-  cp -p "$OLD_CONFIG_DIR/.env" "$CONFIG_DIR/.env"
   chmod 600 "$CONFIG_DIR/.env"
 fi
 

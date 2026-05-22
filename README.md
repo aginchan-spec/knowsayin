@@ -26,10 +26,31 @@ POST /v1/clean
 
 客户端不会携带 DeepSeek API key。DeepSeek key 只放在服务器环境变量里。
 
-## 运行桌面版
+## 从 GitHub 安装 macOS 桌面版
+
+如果 repo 还是 private，先确认本机 GitHub 已登录并有访问权限；公开发布给用户前，建议把安装仓库改成 public，或提供下载包。
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/aginchan-spec/knowsayin.git
+cd knowsayin
+python3 -m pip install --user -r requirements.txt
+cp .env.example .env
+scripts/build_macos_app.sh
+open "/Applications/KnowSayin.app"
+```
+
+首次打开后，到 macOS：
+
+```text
+System Settings -> Privacy & Security -> Accessibility
+```
+
+给 `KnowSayin.app` 打开权限。没有 Accessibility 权限时，App 可以启动，但无法读取和替换目标输入框文字。
+
+## 运行桌面版开发模式
+
+```bash
+python3 -m pip install --user -r requirements.txt
 cp .env.example .env
 python -m app.main
 ```
@@ -43,7 +64,7 @@ scripts/build_macos_app.sh
 open "/Applications/KnowSayin.app"
 ```
 
-打包脚本固定使用 bundle id `com.knowsayin.app`。打包版读取 `~/Library/Application Support/KnowSayin/.env`；如果这个文件不存在，会从旧 `~/Library/Application Support/Just Saying/.env` 或项目 `.env` 迁移一次。
+打包脚本固定使用 bundle id `com.knowsayin.app`。打包版读取 `~/Library/Application Support/KnowSayin/.env`；如果这个文件不存在，会从项目 `.env` 初始化一次。
 
 ## 运行 VM101/API 中转服务
 
@@ -125,7 +146,7 @@ OPENAI_MODEL=deepseek-chat
 ## 权限和限制
 
 - macOS 需要给 `KnowSayin.app`、或运行 `python -m app.main` 的终端/Python 授予 Accessibility 权限，否则无法读取和替换当前输入框文字。
-- 新 bundle id 是 `com.knowsayin.app`，从旧 Just Saying 迁移后需要重新授权一次。
+- bundle id 是 `com.knowsayin.app`。重新打包或迁移机器后，macOS 可能要求重新授权一次。
 - 默认 `Option + Shift` 和三下 `Option` 不需要额外 Input Monitoring。
 - 目标 App 需要能在重新激活后保留输入框焦点；如果网页或 App 特殊处理焦点，仍可能读不到文字。
 - 只恢复文本剪贴板内容；如果原剪贴板是图片或富文本，当前版本不会完整还原。

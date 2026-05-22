@@ -342,23 +342,19 @@ def _load_web_settings() -> WebSettings:
     from os import getenv
 
     return WebSettings(
-        require_pass=_env_bool("KNOWSAYIN_WEB_REQUIRE_PASS", _env_bool("JUSTSAYING_WEB_REQUIRE_PASS", True)),
-        default_daily_limit=_env_int("KNOWSAYIN_WEB_DEFAULT_DAILY_LIMIT", _env_int("JUSTSAYING_WEB_DEFAULT_DAILY_LIMIT", 100)),
-        default_max_chars=_env_int("KNOWSAYIN_WEB_DEFAULT_MAX_CHARS", _env_int("JUSTSAYING_WEB_DEFAULT_MAX_CHARS", 3000)),
-        global_daily_limit=_env_int("KNOWSAYIN_WEB_GLOBAL_DAILY_LIMIT", _env_int("JUSTSAYING_WEB_GLOBAL_DAILY_LIMIT", 1000)),
-        site_url=(
-            getenv("KNOWSAYIN_WEB_SITE_URL")
-            or getenv("JUSTSAYING_WEB_SITE_URL")
-            or "https://knowsayin.com"
-        ).strip(),
-        base_path=_normalize_base_path(getenv("KNOWSAYIN_WEB_BASE_PATH") or getenv("JUSTSAYING_WEB_BASE_PATH") or ""),
+        require_pass=_env_bool("KNOWSAYIN_WEB_REQUIRE_PASS", True),
+        default_daily_limit=_env_int("KNOWSAYIN_WEB_DEFAULT_DAILY_LIMIT", 100),
+        default_max_chars=_env_int("KNOWSAYIN_WEB_DEFAULT_MAX_CHARS", 3000),
+        global_daily_limit=_env_int("KNOWSAYIN_WEB_GLOBAL_DAILY_LIMIT", 1000),
+        site_url=(getenv("KNOWSAYIN_WEB_SITE_URL") or "https://knowsayin.com").strip(),
+        base_path=_normalize_base_path(getenv("KNOWSAYIN_WEB_BASE_PATH") or ""),
     )
 
 
 def _load_passes(settings: WebSettings) -> dict[str, PassConfig]:
     from os import getenv
 
-    raw = (getenv("KNOWSAYIN_WEB_PASSES") or getenv("JUSTSAYING_WEB_PASSES") or "").strip()
+    raw = (getenv("KNOWSAYIN_WEB_PASSES") or "").strip()
     if not raw:
         return {} if settings.require_pass else {}
 
