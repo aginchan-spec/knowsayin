@@ -16,6 +16,7 @@ const complimentGrid = document.querySelector("#complimentGrid");
 const TOKEN_KEY = "knowsayin.cloudToken";
 const DEVICE_KEY = "knowsayin.deviceCode";
 const LONG_TEXT_THRESHOLD = 800;
+applyThemeOverride();
 const LANG = detectLanguage();
 
 const COPY = {
@@ -122,6 +123,14 @@ function detectLanguage() {
   }
   const languages = navigator.languages || [navigator.language || "en"];
   return languages.some((value) => String(value).toLowerCase().startsWith("zh")) ? "zh" : "en";
+}
+
+function applyThemeOverride() {
+  const forcedTheme = new URL(window.location.href).searchParams.get("theme") || "";
+  const theme = forcedTheme.toLowerCase();
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.dataset.theme = theme;
+  }
 }
 
 function text(key) {

@@ -13,32 +13,39 @@
   </head>
   <body>
     <main class="app-shell">
-      <header class="topbar">
+      <header class="site-header">
+        <a class="brand" href="/" aria-label="KnowSayin">
+          <span class="brand-mark">KS</span>
+          <span>KnowSayin</span>
+        </a>
+        <nav class="top-actions" aria-label="Primary">
+          <a href="/download" id="downloadLink">Download</a>
+          <a href="#" id="githubLink">GitHub</a>
+          <div class="quota" id="quotaLine">Quota -</div>
+        </nav>
+      </header>
+
+      <section class="intro" aria-labelledby="pageTitle">
         <div class="headline-block">
           <h1 id="pageTitle" data-i18n="headline">From brain dump to brilliant prompt.</h1>
           <p class="headline-sub" data-i18n="headlineSub">
             Desktop app: type roughly in any chat box, press Option + Shift, and KnowSayin rewrites it in place.
           </p>
         </div>
-        <div class="top-actions">
-          <a href="/download" id="downloadLink">Download</a>
-          <a href="#" id="githubLink">GitHub</a>
-          <div class="quota" id="quotaLine">Quota -</div>
-        </div>
-      </header>
 
-      <section class="desktop-strip" aria-labelledby="desktopTitle">
-        <div>
-          <p class="eyebrow" id="desktopTitle" data-i18n="desktopKicker">Desktop instant prompt cleanup</p>
-          <p class="desktop-lead" data-i18n="desktopLead">
-            No tab switching, no copy-paste loop. Draft your thought in the chat box, then optimize it in place.
-          </p>
-        </div>
-        <div class="instant-steps" aria-label="Desktop app steps">
-          <span data-i18n="desktopStepDraft">Draft in the chat box</span>
-          <span data-i18n="desktopStepTrigger">Click Optimize or press Option + Shift</span>
-          <span data-i18n="desktopStepReplace">It rewrites the prompt right there</span>
-        </div>
+        <section class="desktop-strip" aria-labelledby="desktopTitle">
+          <div>
+            <p class="eyebrow" id="desktopTitle" data-i18n="desktopKicker">Desktop instant prompt cleanup</p>
+            <p class="desktop-lead" data-i18n="desktopLead">
+              No tab switching, no copy-paste loop. Draft your thought in the chat box, then optimize it in place.
+            </p>
+          </div>
+          <div class="instant-steps" aria-label="Desktop app steps">
+            <span data-i18n="desktopStepDraft">Draft in the chat box</span>
+            <span data-i18n="desktopStepTrigger">Click Optimize or press Option + Shift</span>
+            <span data-i18n="desktopStepReplace">It rewrites the prompt right there</span>
+          </div>
+        </section>
       </section>
 
       <section class="extra-panel" id="extraPanel" aria-labelledby="extraTitle" hidden>
@@ -53,33 +60,35 @@
         <button class="primary" id="extraButton" type="button" data-i18n="extraSubmit">Send and refill</button>
       </section>
 
-      <section class="editor">
-        <div class="field-meta">
-          <label for="sourceText" data-i18n="sourceLabel">Original</label>
-          <span id="charCount">0 / 3000</span>
+      <section class="workbench" aria-label="Prompt cleaner">
+        <section class="editor source-editor">
+          <div class="field-meta">
+            <label for="sourceText" data-i18n="sourceLabel">Original</label>
+            <span id="charCount">0 / 3000</span>
+          </div>
+          <textarea
+            id="sourceText"
+            maxlength="3000"
+            placeholder="Paste dictated text, notes, or rough thoughts here"
+          ></textarea>
+        </section>
+
+        <div class="primary-actions">
+          <button id="optimizeButton" class="primary" type="button">Optimize</button>
         </div>
-        <textarea
-          id="sourceText"
-          maxlength="3000"
-          placeholder="Paste dictated text, notes, or rough thoughts here"
-        ></textarea>
+
+        <section class="editor result-editor">
+          <label for="resultText" data-i18n="resultLabel">Result</label>
+          <textarea id="resultText" readonly placeholder="Your refined prompt will appear here"></textarea>
+        </section>
+
+        <div class="secondary-actions">
+          <button id="copyButton" type="button" disabled data-i18n="copyButton">Copy result</button>
+          <button id="clearButton" type="button" data-i18n="clearButton">Clear</button>
+        </div>
+
+        <p class="status" id="statusLine" role="status" aria-live="polite"></p>
       </section>
-
-      <div class="primary-actions">
-        <button id="optimizeButton" class="primary" type="button">Optimize</button>
-      </div>
-
-      <section class="editor result-editor">
-        <label for="resultText" data-i18n="resultLabel">Result</label>
-        <textarea id="resultText" readonly placeholder="Your refined prompt will appear here"></textarea>
-      </section>
-
-      <div class="secondary-actions">
-        <button id="copyButton" type="button" disabled data-i18n="copyButton">Copy result</button>
-        <button id="clearButton" type="button" data-i18n="clearButton">Clear</button>
-      </div>
-
-      <p class="status" id="statusLine" role="status" aria-live="polite"></p>
     </main>
 
     <script src="/static/site.js"></script>
