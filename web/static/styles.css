@@ -91,6 +91,20 @@ textarea {
   margin-bottom: 16px;
 }
 
+.web-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-icon {
+  width: clamp(42px, 12vw, 58px);
+  height: clamp(42px, 12vw, 58px);
+  flex: 0 0 auto;
+  border-radius: 13px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
+}
+
 h1 {
   margin: 0;
   color: var(--ink);

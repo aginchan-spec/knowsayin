@@ -301,6 +301,7 @@ class JustSayingWebHandler(BaseHTTPRequestHandler):
         self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
 
     def _send_manifest(self, base_path: str) -> None:
+        static_prefix = f"{base_path}/static" if base_path else "/static"
         body = {
             "name": "KnowSayin",
             "short_name": "KnowSayin",
@@ -308,7 +309,18 @@ class JustSayingWebHandler(BaseHTTPRequestHandler):
             "display": "standalone",
             "background_color": "#080a0d",
             "theme_color": "#080a0d",
-            "icons": [],
+            "icons": [
+                {
+                    "src": f"{static_prefix}/icon-192.png",
+                    "sizes": "192x192",
+                    "type": "image/png",
+                },
+                {
+                    "src": f"{static_prefix}/icon-512.png",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                },
+            ],
         }
         self._send_bytes(
             json.dumps(body, ensure_ascii=False).encode("utf-8"),

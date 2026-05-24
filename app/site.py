@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import mimetypes
 import os
@@ -11,9 +12,10 @@ from pathlib import Path
 from typing import Any
 from urllib import request
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .config import PROJECT_ROOT
+from .model_config import APP_VERSION
 
 
 SITE_ROOT = PROJECT_ROOT / "site"
@@ -131,10 +133,19 @@ class KnowSayinSiteHandler(BaseHTTPRequestHandler):
             self._handle_config()
             return
         if path == "/download":
-            self._redirect(_load_settings().download_url)
+            self._send_download()
+            return
+        if path == "/install-macos.sh":
+            self._send_file(SITE_ROOT / "static" / "install-macos.sh", "text/x-shellscript; charset=utf-8")
             return
         if path == "/" or path == "/index.html":
             self._send_index()
+            return
+        if path == "/favicon.ico":
+            self._send_static("favicon-32.png")
+            return
+        if path == "/apple-touch-icon.png":
+            self._send_static("apple-touch-icon.png")
             return
         if path.startswith("/static/"):
             self._send_static(path.removeprefix("/static/"))
@@ -267,6 +278,32 @@ class KnowSayinSiteHandler(BaseHTTPRequestHandler):
     def _send_index(self) -> None:
         self._send_file(SITE_ROOT / "index.html", "text/html; charset=utf-8")
 
+    def _send_download(self) -> None:
+        settings = _load_settings()
+        install_command = "curl -fsSL https://knowsayin.com/install-macos.sh | bash"
+        agent_prompt_en = _agent_prompt("en", settings.download_url)
+        agent_prompt_zh = _agent_prompt("zh", settings.download_url)
+        replacements = {
+            "__DOWNLOAD_URL__": html.escape(settings.download_url, quote=True),
+            "__DOWNLOAD_URL_JSON__": json.dumps(settings.download_url),
+            "__GITHUB_URL__": html.escape(settings.github_url, quote=True),
+            "__INSTALL_COMMAND__": html.escape(install_command),
+            "__INSTALL_COMMAND_JSON__": json.dumps(install_command),
+            "__AGENT_PROMPT_EN__": html.escape(agent_prompt_en),
+            "__AGENT_PROMPT_EN_JSON__": json.dumps(agent_prompt_en),
+            "__AGENT_PROMPT_ZH__": html.escape(agent_prompt_zh),
+            "__AGENT_PROMPT_ZH_JSON__": json.dumps(agent_prompt_zh),
+            "__DOWNLOAD_FILENAME__": html.escape(_download_filename(settings.download_url)),
+        }
+        try:
+            html_text = (SITE_ROOT / "download.html").read_text(encoding="utf-8")
+        except FileNotFoundError:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        for placeholder, value in replacements.items():
+            html_text = html_text.replace(placeholder, value)
+        self._send_bytes(html_text.encode("utf-8"), "text/html; charset=utf-8")
+
     def _send_static(self, relative: str) -> None:
         safe_parts = [part for part in Path(relative).parts if part not in {"", ".", ".."}]
         if not safe_parts:
@@ -286,6 +323,9 @@ class KnowSayinSiteHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
 
+        self._send_bytes(body, content_type)
+
+    def _send_bytes(self, body: bytes, content_type: str) -> None:
         self.send_response(HTTPStatus.OK)
         self._send_common_headers(content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -321,13 +361,13 @@ def _load_settings() -> SiteSettings:
     download_url = (
         os.getenv("KNOWSAYIN_SITE_DOWNLOAD_URL")
         or os.getenv("KNOWSAYIN_DOWNLOAD_URL")
-        or _github_download_section_url(github_url)
+        or _github_latest_dmg_url(github_url)
     ).strip()
     if _is_self_download_url(download_url, public_url) or _same_url_without_fragment(
         download_url,
         github_url,
     ):
-        download_url = _github_download_section_url(github_url)
+        download_url = _github_latest_dmg_url(github_url)
 
     return SiteSettings(
         public_url=public_url,
@@ -367,8 +407,41 @@ def _same_url_without_fragment(left: str, right: str) -> bool:
     )
 
 
-def _github_download_section_url(github_url: str) -> str:
-    return f"{github_url.split('#', 1)[0].rstrip('/')}#download"
+def _github_latest_release_url(github_url: str) -> str:
+    return f"{github_url.split('#', 1)[0].rstrip('/')}/releases/latest"
+
+
+def _github_latest_dmg_url(github_url: str) -> str:
+    filename = f"KnowSayin-{APP_VERSION}-macos-unsigned.dmg"
+    return f"{_github_latest_release_url(github_url)}/download/{quote(filename)}"
+
+
+def _download_filename(download_url: str) -> str:
+    name = Path(urlparse(download_url).path).name
+    return name or "KnowSayin.dmg"
+
+
+def _agent_prompt(language: str, download_url: str) -> str:
+    install_command = "curl -fsSL https://knowsayin.com/install-macos.sh | bash"
+    if language == "zh":
+        return "\n".join(
+            [
+                "请帮我在这台 Mac 上安装 KnowSayin。",
+                f"打开 {download_url} 下载最新 macOS 安装包，或在 Terminal 运行：",
+                install_command,
+                "安装到 /Applications/KnowSayin.app 后打开它，并帮我启用 macOS Accessibility 权限。",
+                "不要保存、打印或记录我的私密 prompts、API keys、tokens、录音或 transcripts。",
+            ],
+        )
+    return "\n".join(
+        [
+            "Please install KnowSayin on this Mac.",
+            f"Download the latest macOS build from {download_url}, or run this in Terminal:",
+            install_command,
+            "Install it to /Applications/KnowSayin.app, open it, and help me enable macOS Accessibility permission if needed.",
+            "Do not store or print private prompts, API keys, tokens, recordings, or transcripts.",
+        ],
+    )
 
 
 def _post_internal_json(

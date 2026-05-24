@@ -11,6 +11,7 @@ WORK_DIR="/tmp/knowsayin-pyinstaller"
 INSTALL_DIR="${KNOWSAYIN_INSTALL_DIR:-/Applications}"
 CONFIG_DIR="${KNOWSAYIN_CONFIG_DIR:-$HOME/Library/Application Support/KnowSayin}"
 PYINSTALLER="${KNOWSAYIN_PYINSTALLER:-$(command -v pyinstaller || true)}"
+ICON_FILE="$PROJECT_DIR/assets/knowsayin.icns"
 CODESIGN_IDENTITY="${KNOWSAYIN_CODESIGN_IDENTITY:-}"
 REQUIRE_CODESIGN="${KNOWSAYIN_REQUIRE_CODESIGN:-false}"
 
@@ -65,6 +66,10 @@ PYINSTALLER_ARGS=(
   --workpath "$WORK_DIR"
   --specpath "$BUILD_DIR"
 )
+
+if [[ -f "$ICON_FILE" ]]; then
+  PYINSTALLER_ARGS+=(--icon "$ICON_FILE")
+fi
 
 if [[ -n "$CODESIGN_IDENTITY" ]]; then
   PYINSTALLER_ARGS+=(--codesign-identity "$CODESIGN_IDENTITY")

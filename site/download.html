@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#080a0d" />
+    <title>Download KnowSayin</title>
+    <meta name="description" content="Download the KnowSayin macOS desktop app." />
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/static/favicon-32.png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
+    <link rel="manifest" href="/static/manifest.webmanifest" />
+    <link rel="stylesheet" href="/static/site.css" />
+  </head>
+  <body>
+    <main class="app-shell download-shell">
+      <header class="site-header">
+        <a class="brand" href="/" aria-label="KnowSayin">
+          <span class="brand-mark" aria-hidden="true">
+            <img src="/static/icon.svg" alt="" />
+          </span>
+          <span>KnowSayin</span>
+        </a>
+        <nav class="top-actions" aria-label="Primary">
+          <a href="/">Web cleaner</a>
+          <a href="__GITHUB_URL__">GitHub</a>
+        </nav>
+      </header>
+
+      <section class="download-intro">
+        <p class="eyebrow" data-i18n="kicker">Mac desktop app</p>
+        <h1 data-i18n="title">Download KnowSayin</h1>
+        <p class="headline-sub" data-i18n="subtitle">
+          Install the small floating app, then press Option + Shift to clean rough prompts in place.
+        </p>
+      </section>
+
+      <section class="download-workbench" aria-labelledby="downloadTitle">
+        <div class="download-primary">
+          <h2 id="downloadTitle" data-i18n="packageTitle">macOS build</h2>
+          <p data-i18n="packageText">
+            Early unsigned build. macOS will ask for confirmation and Accessibility access on first launch.
+          </p>
+          <a class="primary download-button" href="__DOWNLOAD_URL__" data-i18n="downloadButton">Download DMG</a>
+          <p class="download-file">__DOWNLOAD_FILENAME__</p>
+        </div>
+
+        <div class="install-options">
+          <section class="install-option">
+            <div>
+              <h3 data-i18n="terminalTitle">Terminal install</h3>
+              <p data-i18n="terminalText">For Mac users comfortable with Terminal.</p>
+            </div>
+            <pre><code>__INSTALL_COMMAND__</code></pre>
+            <button type="button" data-copy="terminal" data-i18n="copyTerminal">Copy command</button>
+          </section>
+
+          <section class="install-option">
+            <div>
+              <h3 data-i18n="agentTitle">AI Agent install</h3>
+              <p data-i18n="agentText">For Codex, Claude Code, Cursor Agent, or similar tools.</p>
+            </div>
+            <button type="button" data-copy="agent" data-i18n="copyAgent">Copy prompt</button>
+          </section>
+        </div>
+
+        <p class="status" id="downloadStatus" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <script>
+      const installCommand = __INSTALL_COMMAND_JSON__;
+      const agentPrompt = {
+        en: __AGENT_PROMPT_EN_JSON__,
+        zh: __AGENT_PROMPT_ZH_JSON__,
+      };
+      const copy = {
+        en: {
+          kicker: "Mac desktop app",
+          title: "Download KnowSayin",
+          subtitle: "Install the small floating app, then press Option + Shift to clean rough prompts in place.",
+          packageTitle: "macOS build",
+          packageText: "Early unsigned build. macOS will ask for confirmation and Accessibility access on first launch.",
+          downloadButton: "Download DMG",
+          terminalTitle: "Terminal install",
+          terminalText: "For Mac users comfortable with Terminal.",
+          agentTitle: "AI Agent install",
+          agentText: "For Codex, Claude Code, Cursor Agent, or similar tools.",
+          copyTerminal: "Copy command",
+          copyAgent: "Copy prompt",
+          copied: "Copied.",
+          selected: "Selected. Copy it manually.",
+        },
+        zh: {
+          kicker: "Mac 桌面版",
+          title: "下载 KnowSayin",
+          subtitle: "安装小浮窗 App，然后按 Option + Shift，在当前输入框里直接整理 prompt。",
+          packageTitle: "macOS 安装包",
+          packageText: "早期未公证版本。首次打开时，macOS 会要求确认并开启 Accessibility 权限。",
+          downloadButton: "下载 DMG",
+          terminalTitle: "Terminal 安装",
+          terminalText: "适合愿意打开 Terminal 的 Mac 用户。",
+          agentTitle: "AI Agent 安装",
+          agentText: "适合 Codex、Claude Code、Cursor Agent 等工具。",
+          copyTerminal: "复制命令",
+          copyAgent: "复制提示词",
+          copied: "已复制。",
+          selected: "已选中，可手动复制。",
+        },
+      };
+
+      function language() {
+        const params = new URL(window.location.href).searchParams;
+        const forced = (params.get("lang") || "").toLowerCase();
+        if (forced.startsWith("zh")) return "zh";
+        if (forced.startsWith("en")) return "en";
+        const languages = navigator.languages || [navigator.language || "en"];
+        return languages.some((value) => String(value).toLowerCase().startsWith("zh")) ? "zh" : "en";
+      }
+
+      const lang = language();
+      document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+      document.querySelectorAll("[data-i18n]").forEach((node) => {
+        node.textContent = copy[lang][node.dataset.i18n] || node.textContent;
+      });
+
+      const status = document.querySelector("#downloadStatus");
+      function copyFallback(value) {
+        const scratch = document.createElement("textarea");
+        scratch.value = value;
+        scratch.setAttribute("readonly", "");
+        scratch.style.position = "fixed";
+        scratch.style.inset = "0 auto auto 0";
+        scratch.style.width = "1px";
+        scratch.style.height = "1px";
+        scratch.style.opacity = "0";
+        document.body.appendChild(scratch);
+        scratch.select();
+        try {
+          if (!document.execCommand("copy")) {
+            throw new Error("copy failed");
+          }
+          status.textContent = copy[lang].copied;
+          status.dataset.kind = "success";
+        } catch {
+          status.textContent = copy[lang].selected;
+          status.dataset.kind = "error";
+        } finally {
+          scratch.remove();
+        }
+      }
+
+      document.querySelectorAll("[data-copy]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const value = button.dataset.copy === "agent" ? agentPrompt[lang] : installCommand;
+          try {
+            await navigator.clipboard.writeText(value);
+            status.textContent = copy[lang].copied;
+            status.dataset.kind = "success";
+          } catch {
+            copyFallback(value);
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

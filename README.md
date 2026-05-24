@@ -6,16 +6,15 @@ It is a macOS desktop helper plus a lightweight web cleaner at [knowsayin.com](h
 
 ## Download
 
-Early macOS builds are installed from this repository:
+Get the latest macOS build from [knowsayin.com/download](https://knowsayin.com/download).
+
+You can also install from Terminal:
 
 ```bash
-git clone https://github.com/aginchan-spec/knowsayin.git
-cd knowsayin
-scripts/install_macos.sh
-open "/Applications/KnowSayin.app"
+curl -fsSL https://knowsayin.com/install-macos.sh | bash
 ```
 
-This installs the desktop client only. Optimization still runs through KnowSayin Cloud.
+This installs the desktop client only. Optimization still runs through KnowSayin Cloud. Early builds are unsigned, so macOS may ask you to confirm before opening the app.
 
 On first launch, enable macOS Accessibility permission for `KnowSayin.app`:
 

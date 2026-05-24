@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="KnowSayin">
+  <defs>
+    <linearGradient id="wave-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2d6cdf"/>
+      <stop offset="100%" stop-color="#267360"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="206" fill="#161817"/>
+  <path d="M246 206h532c61 0 110 49 110 110v342c0 61-49 110-110 110H496L338 882c-24 17-56-7-46-35l31-79h-77c-61 0-110-49-110-110V316c0-61 49-110 110-110Z" fill="#fbfcf8"/>
+  <path d="M 300 487 C 320 487, 330 427, 340 427 C 350 427, 360 547, 370 547 C 380 547, 390 367, 400 367 C 410 367, 420 607, 430 607 C 440 607, 450 307, 460 307 C 470 307, 480 667, 490 667 C 500 667, 510 387, 520 387 C 530 387, 540 587, 550 587 C 560 587, 570 447, 580 447 C 590 447, 600 487, 610 487 L 720 487" fill="none" stroke="url(#wave-grad)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -4,10 +4,15 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 import objc
 import Quartz
-from ApplicationServices import AXIsProcessTrusted
+from ApplicationServices import (
+    AXIsProcessTrusted,
+    AXIsProcessTrustedWithOptions,
+    kAXTrustedCheckOptionPrompt,
+)
 from AppKit import (
     NSAlert,
     NSApp,
@@ -32,14 +37,13 @@ from AppKit import (
     NSWorkspace,
     NSEvent,
 )
-from Foundation import NSAttributedString, NSObject, NSTimer
+from Foundation import NSAttributedString, NSLocale, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
 from .model_config import (
     APP_NAME,
     APP_VERSION,
     ENV_PATH,
-    DEFAULT_CLOUD_API_BASE_URL,
     DEFAULT_OPTIMIZE_HOTKEY,
     DEFAULT_UNDO_HOTKEY,
     get_active_model_config,
@@ -48,6 +52,12 @@ from .model_config import (
 )
 from .optimizer import optimize_prompt
 from .paste import CapturedText, capture_focused_text, replace_captured_text
+
+
+APP_BUNDLE_ID = "com.knowsayin.app"
+APP_BUNDLE_PATH = "/Applications/KnowSayin.app"
+SHARE_DOWNLOAD_URL = "https://knowsayin.com/download"
+SHARE_INSTALL_COMMAND = "curl -fsSL https://knowsayin.com/install-macos.sh | bash"
 
 
 @dataclass(frozen=True)
@@ -89,6 +99,13 @@ class JustSayingApp(NSObject):
         self.cloud_plan = "free"
         self.quota_refreshing = False
         self.cloud_available = False
+        self.active_hotkey_capture: str | None = None
+        self.hotkey_capture_flags: dict[str, int] = {"optimize": 0, "undo": 0}
+        self.hotkey_capture_taps: dict[str, tuple[str, int, float]] = {
+            "optimize": ("", 0, 0.0),
+            "undo": ("", 0, 0.0),
+        }
+        self.settings_hotkey_monitor = None
         self._reload_hotkeys_from_settings()
         self.buttons: list[NSButton] = []
         self.window = self._build_window()
@@ -156,7 +173,10 @@ class JustSayingApp(NSObject):
         self._show_floating_window()
 
     def openPermissions_(self, sender) -> None:
-        self._open_permission_settings("accessibility")
+        self._request_system_accessibility_permission()
+
+    def revealApp_(self, sender) -> None:
+        self._reveal_app_in_finder()
 
     def openSettings_(self, sender) -> None:
         self._show_settings_window()
@@ -165,18 +185,27 @@ class JustSayingApp(NSObject):
         self._set_status("Checking for KnowSayin updates...")
         threading.Thread(target=self._check_update_worker, daemon=True).start()
 
+    def openShare_(self, sender) -> None:
+        self._show_share_window()
+
+    def copyShareWebsite_(self, sender) -> None:
+        self._copy_share_text("website")
+
+    def copyShareTerminal_(self, sender) -> None:
+        self._copy_share_text("terminal")
+
+    def copyShareAgent_(self, sender) -> None:
+        self._copy_share_text("agent")
+
+    def closeShare_(self, sender) -> None:
+        if hasattr(self, "share_window"):
+            self.share_window.orderOut_(self)
+
     def saveSettings_(self, sender) -> None:
         optimize_hotkey = str(self.optimize_hotkey_field.stringValue()).strip()
         undo_hotkey = str(self.undo_hotkey_field.stringValue()).strip()
 
-        try:
-            optimize_spec = _parse_hotkey(optimize_hotkey or DEFAULT_OPTIMIZE_HOTKEY)
-            undo_spec = _parse_hotkey(undo_hotkey or DEFAULT_UNDO_HOTKEY)
-        except ValueError as exc:
-            self.settings_status.setStringValue_(f"Hotkey format error: {exc}")
-            return
-        if _same_hotkey(optimize_spec, undo_spec):
-            self.settings_status.setStringValue_("Optimize and undo cannot use the same hotkey.")
+        if not self._validate_settings_fields():
             return
 
         try:
@@ -191,12 +220,14 @@ class JustSayingApp(NSObject):
         self._reload_hotkeys_from_settings()
         self._sync_key_event_tap()
         self._update_hotkey_tooltips()
-        self.settings_status.setStringValue_(f"Saved to {ENV_PATH}.")
+        self.settings_status.setStringValue_(_localized("Saved.", "已保存。"))
         self._set_status(self._ready_status())
         self._refresh_cloud_quota_async()
+        self.active_hotkey_capture = None
         self.settings_window.orderOut_(self)
 
     def cancelSettings_(self, sender) -> None:
+        self.active_hotkey_capture = None
         self.settings_window.orderOut_(self)
 
     @objc.python_method
@@ -343,6 +374,7 @@ class JustSayingApp(NSObject):
             ("Settings", "openSettings:"),
             ("Check for Updates", "checkUpdate:"),
             ("Open Accessibility Settings", "openPermissions:"),
+            ("Reveal KnowSayin.app", "revealApp:"),
         ):
             item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, "")
             item.setTarget_(self)
@@ -376,19 +408,17 @@ class JustSayingApp(NSObject):
         self.needs_accessibility = True
         self._set_status("macOS Accessibility permission is required.")
         if show_help:
-            self._show_permission_notice(
-                "accessibility",
-                "KnowSayin Needs Accessibility Permission",
-                "Open macOS Accessibility settings and turn on KnowSayin. If it is already on but this message remains, remove and re-add /Applications/KnowSayin.app, then quit and reopen the app.",
-            )
+            self._request_system_accessibility_permission()
         return False
 
     @objc.python_method
-    def _open_permission_settings(self, kind: str = "accessibility") -> None:
+    def _open_permission_settings(self, kind: str = "accessibility", reset_stale: bool = True) -> None:
         import subprocess
 
         urls = []
         if kind in {"all", "accessibility"}:
+            if reset_stale and not AXIsProcessTrusted():
+                self._reset_accessibility_permission()
             urls.append("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         if kind in {"all", "input"}:
             urls.append("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
@@ -396,6 +426,49 @@ class JustSayingApp(NSObject):
             urls.append("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         for url in urls:
             subprocess.run(["open", url], check=False)
+
+    @objc.python_method
+    def _request_system_accessibility_permission(self) -> None:
+        if AXIsProcessTrusted():
+            self.needs_accessibility = False
+            self._set_status("Accessibility permission is already authorized.")
+            self._refresh_connection_indicator()
+            return
+
+        self._reset_accessibility_permission()
+        try:
+            AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+        except Exception:
+            self._open_permission_settings("accessibility", reset_stale=False)
+        self._set_status("Turn on KnowSayin in Accessibility settings.")
+
+    @objc.python_method
+    def _reset_accessibility_permission(self) -> None:
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["tccutil", "reset", "Accessibility", APP_BUNDLE_ID],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            self._set_status("Could not reset Accessibility permission; remove and re-add KnowSayin manually.")
+            return
+
+        if result.returncode == 0:
+            self._set_status("Reset stale Accessibility permission. Re-add KnowSayin.app in System Settings.")
+        else:
+            self._set_status("Could not reset Accessibility permission; remove and re-add KnowSayin manually.")
+
+    @objc.python_method
+    def _reveal_app_in_finder(self) -> None:
+        import subprocess
+
+        subprocess.run(["open", "-R", APP_BUNDLE_PATH], check=False)
+        self._set_status(f"Revealed {APP_BUNDLE_PATH}.")
 
     @objc.python_method
     def _show_permission_notice(self, key: str, title: str, message: str) -> None:
@@ -410,11 +483,14 @@ class JustSayingApp(NSObject):
             if key == "input-monitoring":
                 alert.addButtonWithTitle_("Open Input Monitoring Settings")
             else:
-                alert.addButtonWithTitle_("Open Accessibility Settings")
-            alert.addButtonWithTitle_("OK")
+                alert.addButtonWithTitle_("Ask macOS for Permission")
+            alert.addButtonWithTitle_("Not Now")
             response = alert.runModal()
             if int(response) == 1000:
-                self._open_permission_settings("input" if key == "input-monitoring" else "accessibility")
+                if key == "input-monitoring":
+                    self._open_permission_settings("input")
+                else:
+                    self._request_system_accessibility_permission()
         except Exception:
             pass
 
@@ -494,6 +570,144 @@ class JustSayingApp(NSObject):
             self._install_key_event_tap(show_notice=True)
         else:
             self._remove_key_event_tap()
+
+    def controlTextDidBeginEditing_(self, notification) -> None:
+        control = notification.object()
+        if hasattr(self, "optimize_hotkey_field") and control == self.optimize_hotkey_field:
+            self._begin_hotkey_capture("optimize")
+        elif hasattr(self, "undo_hotkey_field") and control == self.undo_hotkey_field:
+            self._begin_hotkey_capture("undo")
+
+    def controlTextDidEndEditing_(self, notification) -> None:
+        control = notification.object()
+        if (
+            (hasattr(self, "optimize_hotkey_field") and control == self.optimize_hotkey_field)
+            or (hasattr(self, "undo_hotkey_field") and control == self.undo_hotkey_field)
+        ):
+            self.active_hotkey_capture = None
+
+    @objc.python_method
+    def _begin_hotkey_capture(self, action: str) -> None:
+        self.active_hotkey_capture = action
+        self.hotkey_capture_flags[action] = 0
+        self.hotkey_capture_taps[action] = ("", 0, 0.0)
+        label = _hotkey_action_label(action)
+        self.settings_status.setStringValue_(
+            _localized(
+                f"Press the {label} shortcut. It will be captured automatically.",
+                f"直接按下 {label} 快捷键，会自动识别。",
+            ),
+        )
+
+    @objc.python_method
+    def _install_settings_hotkey_monitor(self) -> None:
+        if self.settings_hotkey_monitor is not None:
+            return
+
+        mask = _appkit_constant("NSEventMaskKeyDown", "NSKeyDownMask") | _appkit_constant(
+            "NSEventMaskFlagsChanged",
+            "NSFlagsChangedMask",
+        )
+
+        def settings_hotkey_handler(event):
+            if self._capture_settings_hotkey_event(event):
+                return None
+            return event
+
+        self.settings_hotkey_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+            mask,
+            settings_hotkey_handler,
+        )
+
+    @objc.python_method
+    def _settings_visible(self) -> bool:
+        return bool(
+            hasattr(self, "settings_window")
+            and self.settings_window
+            and self.settings_window.isVisible()
+        )
+
+    @objc.python_method
+    def _capture_settings_hotkey_event(self, event) -> bool:
+        if not self._settings_visible():
+            return False
+        action = self.active_hotkey_capture
+        if action not in {"optimize", "undo"}:
+            return False
+        event_window = event.window()
+        if event_window is not None and event_window != self.settings_window:
+            return False
+
+        event_type = int(event.type())
+        if event_type == _appkit_constant("NSEventTypeFlagsChanged", "NSFlagsChanged"):
+            return self._capture_modifier_hotkey(action, event)
+        if event_type == _appkit_constant("NSEventTypeKeyDown", "NSKeyDown"):
+            return self._capture_key_hotkey(action, event)
+        return False
+
+    @objc.python_method
+    def _capture_modifier_hotkey(self, action: str, event) -> bool:
+        flags = int(event.modifierFlags())
+        previous_flags = self.hotkey_capture_flags.get(action, 0)
+        self.hotkey_capture_flags[action] = flags
+
+        active = _active_modifier_names(flags, quartz=False)
+        previous_active = _active_modifier_names(previous_flags, quartz=False)
+        if not active:
+            return True
+        if len(active) < len(previous_active):
+            return True
+
+        if len(active) == 1:
+            modifier = next(iter(active))
+            now = time.monotonic()
+            previous_modifier, count, last_time = self.hotkey_capture_taps.get(action, ("", 0, 0.0))
+            if previous_modifier == modifier and not previous_active and now - last_time <= 0.7:
+                count += 1
+            else:
+                count = 1
+
+            if count >= 3:
+                self.hotkey_capture_taps[action] = (modifier, 0, now)
+                self._set_captured_hotkey(action, f"{modifier}*3")
+                return True
+
+            self.hotkey_capture_taps[action] = (modifier, count, now)
+            self._set_captured_hotkey(action, _format_hotkey(active))
+            return True
+
+        self.hotkey_capture_taps[action] = ("", 0, 0.0)
+        self._set_captured_hotkey(action, _format_hotkey(active))
+        return True
+
+    @objc.python_method
+    def _capture_key_hotkey(self, action: str, event) -> bool:
+        modifiers = _active_modifier_names(int(event.modifierFlags()), quartz=False)
+        key_name = KEY_NAMES_BY_CODE.get(int(event.keyCode()))
+        if key_name is None:
+            self.settings_status.setStringValue_(_localized("That key is not supported yet.", "暂不支持这个按键。"))
+            return True
+        if not modifiers:
+            self.settings_status.setStringValue_(
+                _localized("Use at least one modifier, such as Option or Command.", "请至少包含一个修饰键，比如 Option 或 Command。"),
+            )
+            return True
+
+        self.hotkey_capture_taps[action] = ("", 0, 0.0)
+        self._set_captured_hotkey(action, _format_hotkey(modifiers, key_name))
+        return True
+
+    @objc.python_method
+    def _set_captured_hotkey(self, action: str, raw: str) -> None:
+        field = self.optimize_hotkey_field if action == "optimize" else self.undo_hotkey_field
+        field.setStringValue_(raw)
+        label = _hotkey_action_label(action)
+        self._validate_settings_fields(
+            _localized(
+                f"Captured {label}: {raw}. Click Save to apply.",
+                f"已识别 {label}: {raw}。点击保存后生效。",
+            ),
+        )
 
     @objc.python_method
     def _reload_hotkeys_from_settings(self) -> None:
@@ -632,6 +846,8 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _key_hotkey_action(self, event_type, event) -> str | None:
+        if self._settings_visible():
+            return None
         if event_type != Quartz.kCGEventKeyDown:
             return None
         for action, hotkey in (
@@ -658,6 +874,9 @@ class JustSayingApp(NSObject):
     @objc.python_method
     def _handle_flags_changed(self, event) -> None:
         flags = int(event.modifierFlags())
+        if self._settings_visible():
+            self.previous_modifier_flags = flags
+            return
         for action, hotkey in (
             ("optimize", self.optimize_hotkey),
             ("undo", self.undo_hotkey),
@@ -1012,8 +1231,8 @@ class JustSayingApp(NSObject):
             self._load_settings_into_fields()
             return
 
-        width = 560
-        height = 330
+        width = 520
+        height = 310
         screen = NSScreen.mainScreen().visibleFrame()
         x = screen.origin.x + screen.size.width - width - 48
         y = screen.origin.y + screen.size.height - height - 70
@@ -1029,7 +1248,7 @@ class JustSayingApp(NSObject):
             NSBackingStoreBuffered,
             False,
         )
-        window.setTitle_("KnowSayin Settings")
+        window.setTitle_(_localized("KnowSayin Settings", "KnowSayin 设置"))
         window.setFloatingPanel_(True)
         window.setHidesOnDeactivate_(False)
 
@@ -1037,56 +1256,195 @@ class JustSayingApp(NSObject):
         content.setWantsLayer_(True)
         content.layer().setBackgroundColor_(NSColor.windowBackgroundColor().CGColor())
 
-        self._label(content, "Cloud Service", 20, 270, 100, 18)
-        self._value_label(content, "KnowSayin Cloud", 132, 270, 388, 18)
+        self._label(content, _localized("Quota refill", "额度回血"), 20, 252, 100, 18)
+        self.settings_quota_label = self._value_label(content, self._quota_text(), 132, 252, 348, 18)
 
-        self._label(content, "Endpoint", 20, 236, 100, 18)
-        self._value_label(content, DEFAULT_CLOUD_API_BASE_URL, 132, 236, 388, 18)
-
-        self._label(content, "Quota", 20, 202, 100, 18)
-        self.settings_quota_label = self._value_label(content, self._quota_text(), 132, 202, 388, 18)
-
-        self._label(content, "Optimize Hotkey", 20, 160, 100, 18)
+        self._label(content, "Optimize", 20, 208, 100, 18)
         self.optimize_hotkey_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 154, 170, 26),
+            NSMakeRect(132, 202, 170, 26),
         )
-        self.optimize_hotkey_field.setPlaceholderString_(DEFAULT_OPTIMIZE_HOTKEY)
+        self.optimize_hotkey_field.setPlaceholderString_(_localized("Press shortcut", "按下快捷键"))
+        self.optimize_hotkey_field.setDelegate_(self)
         content.addSubview_(self.optimize_hotkey_field)
-        self._label(content, "Example: option+shift / option+space", 314, 159, 220, 18)
+        self._label(content, _localized("Click field, then press keys", "点输入框后直接按快捷键"), 314, 207, 180, 18)
 
-        self._label(content, "Undo Hotkey", 20, 124, 100, 18)
+        self._label(content, "Undo", 20, 166, 100, 18)
         self.undo_hotkey_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 118, 170, 26),
+            NSMakeRect(132, 160, 170, 26),
         )
-        self.undo_hotkey_field.setPlaceholderString_(DEFAULT_UNDO_HOTKEY)
+        self.undo_hotkey_field.setPlaceholderString_(_localized("Press shortcut", "按下快捷键"))
+        self.undo_hotkey_field.setDelegate_(self)
         content.addSubview_(self.undo_hotkey_field)
-        self._label(content, "Example: option*3 / command+z", 314, 123, 220, 18)
+        self._label(content, _localized("Tap Option three times for option*3", "连续按三次 Option 可设为 option*3"), 314, 165, 190, 18)
 
-        self.save_settings_button = self._button("Save", "saveSettings:", 132, 66, 90)
-        cancel_button = self._button("Cancel", "cancelSettings:", 232, 66, 90)
+        self._label(content, _localized("Share", "分享"), 20, 118, 100, 18)
+        share_button = self._button(_localized("Share KnowSayin", "分享 KnowSayin"), "openShare:", 132, 112, 170)
+        content.addSubview_(share_button)
+        self._label(content, _localized("Copy install messages for friends", "复制给朋友的安装分享内容"), 314, 117, 180, 18)
+
+        self.save_settings_button = self._button(_localized("Save", "保存"), "saveSettings:", 132, 62, 90)
+        cancel_button = self._button(_localized("Cancel", "取消"), "cancelSettings:", 232, 62, 90)
         content.addSubview_(self.save_settings_button)
         content.addSubview_(cancel_button)
 
-        self.settings_status = NSTextField.labelWithString_(f"Settings are saved to {ENV_PATH}.")
-        self.settings_status.setFrame_(NSMakeRect(20, 20, 520, 32))
+        self.settings_status = NSTextField.labelWithString_(
+            _localized("Click a shortcut field, then press the shortcut.", "点快捷键输入框，然后直接按你要设置的快捷键。"),
+        )
+        self.settings_status.setFrame_(NSMakeRect(20, 18, 480, 28))
         self.settings_status.setFont_(NSFont.systemFontOfSize_(12))
         self.settings_status.setTextColor_(NSColor.secondaryLabelColor())
         self.settings_status.setLineBreakMode_(0)
         content.addSubview_(self.settings_status)
 
         self.settings_window = window
+        self._install_settings_hotkey_monitor()
         self._load_settings_into_fields()
         window.makeKeyAndOrderFront_(self)
+
+    @objc.python_method
+    def _show_share_window(self) -> None:
+        if hasattr(self, "share_window") and self.share_window:
+            self.share_window.makeKeyAndOrderFront_(self)
+            if hasattr(self, "share_status_label"):
+                self.share_status_label.setStringValue_(_localized("Choose what to copy.", "选择要复制的分享内容。"))
+            return
+
+        width = 540
+        height = 270
+        screen = NSScreen.mainScreen().visibleFrame()
+        x = screen.origin.x + screen.size.width - width - 64
+        y = screen.origin.y + screen.size.height - height - 94
+
+        style = (
+            _appkit_constant("NSWindowStyleMaskTitled", "NSTitledWindowMask")
+            | _appkit_constant("NSWindowStyleMaskClosable", "NSClosableWindowMask")
+            | _appkit_constant("NSWindowStyleMaskUtilityWindow", "NSUtilityWindowMask")
+        )
+        window = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(x, y, width, height),
+            style,
+            NSBackingStoreBuffered,
+            False,
+        )
+        window.setTitle_(_localized("Share KnowSayin", "分享 KnowSayin"))
+        window.setFloatingPanel_(True)
+        window.setHidesOnDeactivate_(False)
+
+        content = window.contentView()
+        content.setWantsLayer_(True)
+        content.layer().setBackgroundColor_(NSColor.windowBackgroundColor().CGColor())
+
+        intro = _localized(
+            "Copy a short message for the person you want to share with.",
+            "给朋友复制一段简短的分享内容。",
+        )
+        self._value_label(content, intro, 20, 218, 500, 18)
+
+        self._share_row(
+            content,
+            166,
+            _localized("Website link", "网站链接"),
+            _localized("Best for most friends.", "最适合普通朋友。"),
+            _localized("Copy Website", "复制网站链接"),
+            "copyShareWebsite:",
+        )
+        self._share_row(
+            content,
+            116,
+            _localized("Terminal command", "Terminal 命令"),
+            _localized("For Mac users comfortable with Terminal.", "适合愿意打开 Terminal 的 Mac 用户。"),
+            _localized("Copy Terminal", "复制 Terminal"),
+            "copyShareTerminal:",
+        )
+        self._share_row(
+            content,
+            66,
+            _localized("AI Agent prompt", "AI Agent 提示词"),
+            _localized("For Codex, Claude Code, Cursor Agent, or similar tools.", "适合 Codex、Claude Code、Cursor Agent 等工具。"),
+            _localized("Copy Prompt", "复制提示词"),
+            "copyShareAgent:",
+        )
+
+        close_button = self._button(_localized("Close", "关闭"), "closeShare:", 410, 18, 90)
+        content.addSubview_(close_button)
+
+        self.share_status_label = NSTextField.labelWithString_(_localized("Choose what to copy.", "选择要复制的分享内容。"))
+        self.share_status_label.setFrame_(NSMakeRect(20, 18, 370, 26))
+        self.share_status_label.setFont_(NSFont.systemFontOfSize_(12))
+        self.share_status_label.setTextColor_(NSColor.secondaryLabelColor())
+        self.share_status_label.setLineBreakMode_(0)
+        content.addSubview_(self.share_status_label)
+
+        self.share_window = window
+        window.makeKeyAndOrderFront_(self)
+
+    @objc.python_method
+    def _share_row(
+        self,
+        content,
+        y: int,
+        title: str,
+        detail: str,
+        button_title: str,
+        action: str,
+    ) -> None:
+        self._value_label(content, title, 20, y + 17, 170, 18)
+        self._label(content, detail, 20, y - 2, 330, 18)
+        button = self._button(button_title, action, 370, y + 4, 130)
+        content.addSubview_(button)
+
+    @objc.python_method
+    def _copy_share_text(self, kind: str) -> None:
+        text = _share_text(kind)
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(text, NSPasteboardTypeString)
+        label = {
+            "website": _localized("website link", "网站链接"),
+            "terminal": _localized("Terminal command", "Terminal 命令"),
+            "agent": _localized("AI Agent prompt", "AI Agent 提示词"),
+        }.get(kind, _localized("share text", "分享内容"))
+        message = _localized(f"Copied {label}.", f"已复制{label}。")
+        if hasattr(self, "share_status_label"):
+            self.share_status_label.setStringValue_(message)
+        if hasattr(self, "settings_status"):
+            self.settings_status.setStringValue_(message)
 
     @objc.python_method
     def _load_settings_into_fields(self) -> None:
         data = load_model_settings()
         self.optimize_hotkey_field.setStringValue_(data["optimize_hotkey"] or DEFAULT_OPTIMIZE_HOTKEY)
         self.undo_hotkey_field.setStringValue_(data["undo_hotkey"] or DEFAULT_UNDO_HOTKEY)
-        self.settings_status.setStringValue_(f"Settings are saved to {ENV_PATH}.")
+        self.settings_status.setStringValue_(
+            _localized("Click a shortcut field, then press the shortcut.", "点快捷键输入框，然后直接按你要设置的快捷键。"),
+        )
         if hasattr(self, "settings_quota_label"):
             self.settings_quota_label.setStringValue_(self._quota_text())
         self._refresh_cloud_quota_async()
+
+    @objc.python_method
+    def _validate_settings_fields(self, success_message: str | None = None) -> bool:
+        optimize_hotkey = str(self.optimize_hotkey_field.stringValue()).strip() or DEFAULT_OPTIMIZE_HOTKEY
+        undo_hotkey = str(self.undo_hotkey_field.stringValue()).strip() or DEFAULT_UNDO_HOTKEY
+
+        try:
+            optimize_spec = _parse_hotkey(optimize_hotkey)
+            undo_spec = _parse_hotkey(undo_hotkey)
+        except ValueError as exc:
+            self.settings_status.setStringValue_(
+                _localized(f"Shortcut error: {exc}", f"快捷键错误：{exc}"),
+            )
+            return False
+
+        if _same_hotkey(optimize_spec, undo_spec):
+            self.settings_status.setStringValue_(
+                _localized("Optimize and Undo cannot use the same shortcut.", "Optimize 和 Undo 不能使用同一个快捷键。"),
+            )
+            return False
+
+        if success_message:
+            self.settings_status.setStringValue_(success_message)
+        return True
 
     @objc.python_method
     def _label(self, content, text: str, x: int, y: int, width: int, height: int) -> None:
@@ -1107,13 +1465,38 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _quota_text(self) -> str:
+        next_refill = _format_refill_time(self.quota_refill_at)
         if self._quota_exhausted():
-            return f"0/{self.quota_daily_limit or 20} available; click Get extra for a free refill"
+            if next_refill:
+                return _localized(
+                    f"0/{self.quota_daily_limit or 20} available; next refill {next_refill}",
+                    f"0/{self.quota_daily_limit or 20} 可用；下次回血 {next_refill}",
+                )
+            return _localized(
+                f"0/{self.quota_daily_limit or 20} available; click Get extra for a free refill",
+                f"0/{self.quota_daily_limit or 20} 可用；点击 Get extra 免费回血",
+            )
         if self.quota_remaining is not None and self.quota_daily_limit is not None:
-            return f"{self.quota_remaining}/{self.quota_daily_limit} available; refills 1 every 5 minutes"
+            if next_refill:
+                return _localized(
+                    f"{self.quota_remaining}/{self.quota_daily_limit} available; next refill {next_refill}",
+                    f"{self.quota_remaining}/{self.quota_daily_limit} 可用；下次回血 {next_refill}",
+                )
+            if self.quota_remaining >= self.quota_daily_limit:
+                return _localized(
+                    f"{self.quota_remaining}/{self.quota_daily_limit} available; full",
+                    f"{self.quota_remaining}/{self.quota_daily_limit} 可用；已满",
+                )
+            return _localized(
+                f"{self.quota_remaining}/{self.quota_daily_limit} available; refills 1 every 5 minutes",
+                f"{self.quota_remaining}/{self.quota_daily_limit} 可用；每 5 分钟回 1 次",
+            )
         if self.quota_refreshing:
-            return "Loading..."
-        return "Unavailable"
+            return _localized("Loading...", "正在加载...")
+        return _localized("Unavailable", "暂不可用")
+
+
+MODIFIER_ORDER = ("control", "option", "shift", "command")
 
 
 KEY_CODES: dict[str, int] = {
@@ -1129,6 +1512,15 @@ KEY_CODES: dict[str, int] = {
     "up": 126,
     "delete": 51,
     "backspace": 51,
+    "`": 50,
+    "[": 33,
+    "]": 30,
+    "\\": 42,
+    ";": 41,
+    "'": 39,
+    ",": 43,
+    ".": 47,
+    "/": 44,
     "a": 0,
     "s": 1,
     "d": 2,
@@ -1168,6 +1560,10 @@ KEY_CODES: dict[str, int] = {
     "n": 45,
     "m": 46,
 }
+
+KEY_NAMES_BY_CODE: dict[int, str] = {}
+for _key_name, _key_code in KEY_CODES.items():
+    KEY_NAMES_BY_CODE.setdefault(_key_code, _key_name)
 
 MODIFIER_ALIASES = {
     "option": "option",
@@ -1262,6 +1658,101 @@ def _normalize_hotkey_text(value: str) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
     return text
+
+
+def _preferred_language() -> str:
+    try:
+        languages = list(NSLocale.preferredLanguages())
+    except Exception:
+        languages = []
+    first = str(languages[0] if languages else "").lower()
+    return "zh" if first.startswith("zh") else "en"
+
+
+def _localized(en: str, zh: str) -> str:
+    return zh if _preferred_language() == "zh" else en
+
+
+def _share_text(kind: str) -> str:
+    lang = _preferred_language()
+    if kind == "terminal":
+        if lang == "zh":
+            return "\n".join(
+                [
+                    "在 Mac 的 Terminal 里运行这一行安装 KnowSayin：",
+                    "",
+                    SHARE_INSTALL_COMMAND,
+                    "",
+                    "不需要 GitHub 账号。",
+                ],
+            )
+        return "\n".join(
+            [
+                "Install KnowSayin on macOS from Terminal:",
+                "",
+                SHARE_INSTALL_COMMAND,
+                "",
+                "No GitHub account is required.",
+            ],
+        )
+
+    if kind == "agent":
+        if lang == "zh":
+            return "\n".join(
+                [
+                    "请帮我在这台 Mac 上安装 KnowSayin。",
+                    f"打开 {SHARE_DOWNLOAD_URL}，或在 Terminal 运行：",
+                    SHARE_INSTALL_COMMAND,
+                    f"安装到 {APP_BUNDLE_PATH} 后打开它，并帮我启用 macOS Accessibility 权限。",
+                    "不要保存、打印或记录我的私密 prompts、API keys、tokens、录音或 transcripts。",
+                ],
+            )
+        return "\n".join(
+            [
+                "Please install KnowSayin on this Mac.",
+                f"Go to {SHARE_DOWNLOAD_URL}, or run this in Terminal:",
+                SHARE_INSTALL_COMMAND,
+                f"Install it to {APP_BUNDLE_PATH}, open it, and help me enable macOS Accessibility permission if needed.",
+                "Do not store or print private prompts, API keys, tokens, recordings, or transcripts.",
+            ],
+        )
+
+    if lang == "zh":
+        return "\n".join(
+            [
+                f"我在用 KnowSayin：{SHARE_DOWNLOAD_URL}",
+                "它可以把口述、随手写的想法整理成清楚的 AI prompt。",
+            ],
+        )
+    return "\n".join(
+        [
+            f"Try KnowSayin: {SHARE_DOWNLOAD_URL}",
+            "It cleans up rough dictated notes into clear AI prompts.",
+        ],
+    )
+
+
+def _format_hotkey(modifiers: frozenset[str], key: str | None = None) -> str:
+    parts = [name for name in MODIFIER_ORDER if name in modifiers]
+    if key:
+        parts.append(key)
+    return "+".join(parts)
+
+
+def _hotkey_action_label(action: str) -> str:
+    return "Optimize" if action == "optimize" else "Undo"
+
+
+def _format_refill_time(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if _preferred_language() == "zh":
+        return parsed.astimezone().strftime("%H:%M")
+    return parsed.astimezone().strftime("%-I:%M %p")
 
 
 def _active_modifier_names(flags: int, quartz: bool) -> frozenset[str]:

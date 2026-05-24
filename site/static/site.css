@@ -153,13 +153,17 @@ p {
   width: 34px;
   height: 34px;
   place-items: center;
+  overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--surface);
-  color: var(--accent-strong);
-  font-size: 12px;
-  font-weight: 820;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.68) inset;
+}
+
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .top-actions {
@@ -317,6 +321,130 @@ h2 {
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow-soft);
+}
+
+.download-shell {
+  width: min(1040px, calc(100% - 48px));
+}
+
+.download-intro {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.download-workbench {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  gap: 20px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.download-primary {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding-right: 20px;
+  border-right: 1px solid var(--line);
+}
+
+.download-primary h2,
+.install-option h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1.24;
+  font-weight: 740;
+}
+
+.install-option h3 {
+  font-size: 16px;
+}
+
+.download-primary p,
+.install-option p {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.download-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  width: fit-content;
+  margin-top: 2px;
+  border: 1px solid var(--accent-strong);
+  border-radius: 8px;
+  padding: 0 18px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.download-button:hover {
+  background: var(--accent-strong);
+  transform: translateY(-1px);
+}
+
+.download-file {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.install-options {
+  display: grid;
+  min-width: 0;
+}
+
+.install-option {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-bottom: 16px;
+}
+
+.install-option + .install-option {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.install-option:last-child {
+  padding-bottom: 0;
+}
+
+.install-option pre {
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--field);
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.install-option code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+.install-option button {
+  justify-self: start;
+  min-width: 150px;
 }
 
 .editor {
@@ -500,8 +628,16 @@ body[data-busy="true"] button.primary {
 
 @media (max-width: 899px) {
   .intro,
-  .workbench {
+  .workbench,
+  .download-workbench {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .download-primary {
+    padding-right: 0;
+    padding-bottom: 18px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
 
   .source-editor,
@@ -525,6 +661,10 @@ body[data-busy="true"] button.primary {
   .app-shell {
     width: min(100% - 24px, 1120px);
     padding-top: max(14px, env(safe-area-inset-top));
+  }
+
+  .download-shell {
+    width: min(100% - 24px, 1040px);
   }
 
   .site-header {
@@ -554,9 +694,20 @@ body[data-busy="true"] button.primary {
     display: none;
   }
 
-  .workbench {
+  .download-intro .headline-sub {
+    display: block;
+    font-size: 14px;
+  }
+
+  .workbench,
+  .download-workbench {
     gap: 12px;
     padding: 12px;
+  }
+
+  .download-button,
+  .install-option button {
+    width: 100%;
   }
 
   .compliment-grid,

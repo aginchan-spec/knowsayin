@@ -250,9 +250,7 @@ async function loadConfig() {
     const response = await fetch("/api/config", { headers: { Accept: "application/json" } });
     const data = await response.json();
     state.config = data || {};
-    if (data.downloadUrl) {
-      downloadLink.href = data.downloadUrl;
-    }
+    downloadLink.href = "/download";
     if (data.githubUrl) {
       githubLink.href = data.githubUrl;
     }
