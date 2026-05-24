@@ -22,6 +22,7 @@ def optimize_prompt(
     text: str,
     mode: Mode,
     app_settings: ModelConfig | None = None,
+    target_lang: str | None = None,
 ) -> str:
     normalized = text.strip()
     if not normalized:
@@ -29,7 +30,7 @@ def optimize_prompt(
 
     model_config = app_settings or get_active_model_config()
 
-    return clean_prompt_with_cloud(normalized, mode, model_config.base_url)
+    return clean_prompt_with_cloud(normalized, mode, model_config.base_url, target_lang=target_lang)
 
 
 def _optimize_user_message(text: str, mode: Mode) -> str:

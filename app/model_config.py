@@ -16,6 +16,10 @@ DEFAULT_CLOUD_API_BASE_URL = "https://api.knowsayin.com"
 DEFAULT_CLOUD_MODEL = "knowsayin-cloud"
 DEFAULT_OPTIMIZE_HOTKEY = "option+shift"
 DEFAULT_UNDO_HOTKEY = "option*3"
+DEFAULT_LANG1_CODE = "zh"
+DEFAULT_LANG1_HOTKEY = "option+1"
+DEFAULT_LANG2_CODE = "en"
+DEFAULT_LANG2_HOTKEY = "option+2"
 
 DEFAULT_OPTIMIZE_PROMPT = """You are a voice-to-prompt cleanup assistant.
 
@@ -63,12 +67,20 @@ def load_model_settings() -> dict[str, str]:
         "optimize_prompt": DEFAULT_OPTIMIZE_PROMPT,
         "optimize_hotkey": values.get("KNOWSAYIN_OPTIMIZE_HOTKEY") or DEFAULT_OPTIMIZE_HOTKEY,
         "undo_hotkey": values.get("KNOWSAYIN_UNDO_HOTKEY") or DEFAULT_UNDO_HOTKEY,
+        "lang1_code": values.get("KNOWSAYIN_LANG1_CODE") or DEFAULT_LANG1_CODE,
+        "lang1_hotkey": values.get("KNOWSAYIN_LANG1_HOTKEY") or DEFAULT_LANG1_HOTKEY,
+        "lang2_code": values.get("KNOWSAYIN_LANG2_CODE") or DEFAULT_LANG2_CODE,
+        "lang2_hotkey": values.get("KNOWSAYIN_LANG2_HOTKEY") or DEFAULT_LANG2_HOTKEY,
     }
 
 
 def save_desktop_settings(
     optimize_hotkey: str = DEFAULT_OPTIMIZE_HOTKEY,
     undo_hotkey: str = DEFAULT_UNDO_HOTKEY,
+    lang1_code: str = DEFAULT_LANG1_CODE,
+    lang1_hotkey: str = DEFAULT_LANG1_HOTKEY,
+    lang2_code: str = DEFAULT_LANG2_CODE,
+    lang2_hotkey: str = DEFAULT_LANG2_HOTKEY,
 ) -> None:
     _ensure_env_file()
     _set_env("KNOWSAYIN_PROVIDER", CLOUD_PROVIDER_ID)
@@ -76,6 +88,10 @@ def save_desktop_settings(
     _set_env("KNOWSAYIN_CLOUD_MODEL", DEFAULT_CLOUD_MODEL)
     _set_env("KNOWSAYIN_OPTIMIZE_HOTKEY", optimize_hotkey.strip() or DEFAULT_OPTIMIZE_HOTKEY)
     _set_env("KNOWSAYIN_UNDO_HOTKEY", undo_hotkey.strip() or DEFAULT_UNDO_HOTKEY)
+    _set_env("KNOWSAYIN_LANG1_CODE", lang1_code.strip() or DEFAULT_LANG1_CODE)
+    _set_env("KNOWSAYIN_LANG1_HOTKEY", lang1_hotkey.strip() or DEFAULT_LANG1_HOTKEY)
+    _set_env("KNOWSAYIN_LANG2_CODE", lang2_code.strip() or DEFAULT_LANG2_CODE)
+    _set_env("KNOWSAYIN_LANG2_HOTKEY", lang2_hotkey.strip() or DEFAULT_LANG2_HOTKEY)
     os.chmod(ENV_PATH, 0o600)
 
 
@@ -98,6 +114,10 @@ def _read_env() -> dict[str, str]:
         "KNOWSAYIN_CLOUD_TOKEN",
         "KNOWSAYIN_OPTIMIZE_HOTKEY",
         "KNOWSAYIN_UNDO_HOTKEY",
+        "KNOWSAYIN_LANG1_CODE",
+        "KNOWSAYIN_LANG1_HOTKEY",
+        "KNOWSAYIN_LANG2_CODE",
+        "KNOWSAYIN_LANG2_HOTKEY",
     ):
         if os.getenv(key):
             values[key] = os.getenv(key, "")

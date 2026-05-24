@@ -317,8 +317,10 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "GLOBAL_LIMIT", "message": "今日全站额度已用完。"}, HTTPStatus.TOO_MANY_REQUESTS)
             return
 
+        target_lang = str(payload.get("targetLang") or "").strip() or None
+
         try:
-            result = _call_upstream(text, mode, settings)
+            result = _call_upstream(text, mode, settings, target_lang=target_lang)
         except Exception:
             _log_usage_event(
                 self,
@@ -672,15 +674,35 @@ def _load_settings() -> CloudSettings:
     )
 
 
-def _call_upstream(text: str, mode: str, settings: CloudSettings) -> str:
+SUPPORTED_LANGUAGES = {
+    "zh": {"name": "Chinese", "label": "中文"},
+    "en": {"name": "English", "label": "英文"},
+    "ja": {"name": "Japanese", "label": "日文"},
+    "ko": {"name": "Korean", "label": "韩文"},
+    "es": {"name": "Spanish", "label": "西班牙文"},
+    "fr": {"name": "French", "label": "法文"},
+    "de": {"name": "German", "label": "德文"},
+    "ru": {"name": "Russian", "label": "俄文"},
+    "pt": {"name": "Portuguese", "label": "葡萄牙文"},
+    "it": {"name": "Italian", "label": "意大利文"},
+}
+
+
+def _call_upstream(text: str, mode: str, settings: CloudSettings, target_lang: str | None = None) -> str:
     if not settings.upstream_api_key:
         raise RuntimeError("Missing upstream API key")
     client = OpenAI(api_key=settings.upstream_api_key, base_url=settings.upstream_base_url)
+    
+    system_prompt = DEFAULT_OPTIMIZE_PROMPT
+    if target_lang and target_lang in SUPPORTED_LANGUAGES:
+        target_name = SUPPORTED_LANGUAGES[target_lang]["name"]
+        system_prompt += f"\n7. Translate the final cleaned prompt to {target_name}. Ensure the output is fully written in {target_name}."
+
     response = client.chat.completions.create(
         model=settings.upstream_model,
         temperature=0.2,
         messages=[
-            {"role": "system", "content": DEFAULT_OPTIMIZE_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": _optimize_user_message(text, mode)},  # type: ignore[arg-type]
         ],
     )

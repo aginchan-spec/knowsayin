@@ -30,6 +30,7 @@ from AppKit import (
     NSPanel,
     NSPasteboard,
     NSPasteboardTypeString,
+    NSPopUpButton,
     NSScreen,
     NSStatusBar,
     NSTextField,
@@ -46,6 +47,10 @@ from .model_config import (
     ENV_PATH,
     DEFAULT_OPTIMIZE_HOTKEY,
     DEFAULT_UNDO_HOTKEY,
+    DEFAULT_LANG1_CODE,
+    DEFAULT_LANG1_HOTKEY,
+    DEFAULT_LANG2_CODE,
+    DEFAULT_LANG2_HOTKEY,
     get_active_model_config,
     load_model_settings,
     save_desktop_settings,
@@ -71,6 +76,20 @@ class HotkeySpec:
     tap_count: int = 0
 
 
+SUPPORTED_LANGUAGES = [
+    ("zh", "中文 (Chinese)"),
+    ("en", "English (英文)"),
+    ("ja", "日本語 (Japanese)"),
+    ("ko", "한국어 (Korean)"),
+    ("es", "Español (Spanish)"),
+    ("fr", "Français (French)"),
+    ("de", "Deutsch (German)"),
+    ("ru", "Русский (Russian)"),
+    ("pt", "Português (Portuguese)"),
+    ("it", "Italiano (Italian)"),
+]
+
+
 class JustSayingApp(NSObject):
     def applicationDidFinishLaunching_(self, notification) -> None:
         self.busy = False
@@ -80,9 +99,9 @@ class JustSayingApp(NSObject):
         self.target_name = None
         self.last_original: str | None = None
         self.last_capture: CapturedText | None = None
-        self.hotkey_down: dict[str, bool] = {"optimize": False, "undo": False}
+        self.hotkey_down: dict[str, bool] = {"optimize": False, "undo": False, "lang1": False, "lang2": False}
         self.previous_modifier_flags = 0
-        self.tap_state: dict[str, tuple[int, float]] = {"optimize": (0, 0.0), "undo": (0, 0.0)}
+        self.tap_state: dict[str, tuple[int, float]] = {"optimize": (0, 0.0), "undo": (0, 0.0), "lang1": (0, 0.0), "lang2": (0, 0.0)}
         self.hotkey_handlers = []
         self.hotkey_monitors = []
         self.key_event_tap = None
@@ -108,10 +127,12 @@ class JustSayingApp(NSObject):
         self.credit_game_limit = 2
         self.credit_game_window_seconds = 60
         self.active_hotkey_capture: str | None = None
-        self.hotkey_capture_flags: dict[str, int] = {"optimize": 0, "undo": 0}
+        self.hotkey_capture_flags: dict[str, int] = {"optimize": 0, "undo": 0, "lang1": 0, "lang2": 0}
         self.hotkey_capture_taps: dict[str, tuple[str, int, float]] = {
             "optimize": ("", 0, 0.0),
             "undo": ("", 0, 0.0),
+            "lang1": ("", 0, 0.0),
+            "lang2": ("", 0, 0.0),
         }
         self.settings_hotkey_monitor = None
         self._reload_hotkeys_from_settings()
@@ -225,14 +246,35 @@ class JustSayingApp(NSObject):
     def saveSettings_(self, sender) -> None:
         optimize_hotkey = str(self.optimize_hotkey_field.stringValue()).strip()
         undo_hotkey = str(self.undo_hotkey_field.stringValue()).strip()
+        lang1_hotkey = str(self.lang1_hotkey_field.stringValue()).strip()
+        lang2_hotkey = str(self.lang2_hotkey_field.stringValue()).strip()
+
+        lang1_title = self.lang1_pop_up.titleOfSelectedItem()
+        lang2_title = self.lang2_pop_up.titleOfSelectedItem()
+
+        lang1_code = DEFAULT_LANG1_CODE
+        for code, label in SUPPORTED_LANGUAGES:
+            if label == lang1_title:
+                lang1_code = code
+                break
+
+        lang2_code = DEFAULT_LANG2_CODE
+        for code, label in SUPPORTED_LANGUAGES:
+            if label == lang2_title:
+                lang2_code = code
+                break
 
         if not self._validate_settings_fields():
             return
 
         try:
             save_desktop_settings(
-                optimize_hotkey or DEFAULT_OPTIMIZE_HOTKEY,
-                undo_hotkey or DEFAULT_UNDO_HOTKEY,
+                optimize_hotkey=optimize_hotkey or DEFAULT_OPTIMIZE_HOTKEY,
+                undo_hotkey=undo_hotkey or DEFAULT_UNDO_HOTKEY,
+                lang1_code=lang1_code,
+                lang1_hotkey=lang1_hotkey or DEFAULT_LANG1_HOTKEY,
+                lang2_code=lang2_code,
+                lang2_hotkey=lang2_hotkey or DEFAULT_LANG2_HOTKEY,
             )
         except Exception as exc:
             self.settings_status.setStringValue_(f"Save failed: {exc}")
@@ -252,7 +294,7 @@ class JustSayingApp(NSObject):
         self.settings_window.orderOut_(self)
 
     @objc.python_method
-    def _start_optimize(self) -> None:
+    def _start_optimize(self, target_lang: str | None = None) -> None:
         if self.busy:
             return
         if self._quota_exhausted():
@@ -265,7 +307,7 @@ class JustSayingApp(NSObject):
         self._set_status("Reading the focused text field...")
         self._set_busy(True)
         self._set_button_title(self.optimize_button, "...", primary=True)
-        threading.Thread(target=self._optimize_worker, daemon=True).start()
+        threading.Thread(target=self._optimize_worker, args=(target_lang,), daemon=True).start()
 
     @objc.python_method
     def _start_undo(self) -> None:
@@ -284,7 +326,7 @@ class JustSayingApp(NSObject):
         threading.Thread(target=self._restore_worker, daemon=True).start()
 
     @objc.python_method
-    def _optimize_worker(self) -> None:
+    def _optimize_worker(self, target_lang: str | None = None) -> None:
         try:
             time.sleep(0.12)
             self._activate_target_app()
@@ -294,7 +336,7 @@ class JustSayingApp(NSObject):
                 raise RuntimeError("The focused text field is empty.")
 
             AppHelper.callAfter(self._set_status, "Optimizing text...")
-            cleaned = optimize_prompt(original, "medium").strip()
+            cleaned = optimize_prompt(original, "medium", target_lang=target_lang).strip()
             if not cleaned:
                 raise RuntimeError("The optimized result was empty, so nothing was replaced.")
 
@@ -598,12 +640,18 @@ class JustSayingApp(NSObject):
             self._begin_hotkey_capture("optimize")
         elif hasattr(self, "undo_hotkey_field") and control == self.undo_hotkey_field:
             self._begin_hotkey_capture("undo")
+        elif hasattr(self, "lang1_hotkey_field") and control == self.lang1_hotkey_field:
+            self._begin_hotkey_capture("lang1")
+        elif hasattr(self, "lang2_hotkey_field") and control == self.lang2_hotkey_field:
+            self._begin_hotkey_capture("lang2")
 
     def controlTextDidEndEditing_(self, notification) -> None:
         control = notification.object()
         if (
             (hasattr(self, "optimize_hotkey_field") and control == self.optimize_hotkey_field)
             or (hasattr(self, "undo_hotkey_field") and control == self.undo_hotkey_field)
+            or (hasattr(self, "lang1_hotkey_field") and control == self.lang1_hotkey_field)
+            or (hasattr(self, "lang2_hotkey_field") and control == self.lang2_hotkey_field)
         ):
             self.active_hotkey_capture = None
 
@@ -653,7 +701,7 @@ class JustSayingApp(NSObject):
         if not self._settings_visible():
             return False
         action = self.active_hotkey_capture
-        if action not in {"optimize", "undo"}:
+        if action not in {"optimize", "undo", "lang1", "lang2"}:
             return False
         event_window = event.window()
         if event_window is not None and event_window != self.settings_window:
@@ -720,7 +768,16 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _set_captured_hotkey(self, action: str, raw: str) -> None:
-        field = self.optimize_hotkey_field if action == "optimize" else self.undo_hotkey_field
+        if action == "optimize":
+            field = self.optimize_hotkey_field
+        elif action == "undo":
+            field = self.undo_hotkey_field
+        elif action == "lang1":
+            field = self.lang1_hotkey_field
+        elif action == "lang2":
+            field = self.lang2_hotkey_field
+        else:
+            return
         field.setStringValue_(raw)
         label = _hotkey_action_label(action)
         self._validate_settings_fields(
@@ -741,8 +798,19 @@ class JustSayingApp(NSObject):
             self.undo_hotkey = _parse_hotkey(data.get("undo_hotkey") or DEFAULT_UNDO_HOTKEY)
         except ValueError:
             self.undo_hotkey = _parse_hotkey(DEFAULT_UNDO_HOTKEY)
-        self.hotkey_down = {"optimize": False, "undo": False}
-        self.tap_state = {"optimize": (0, 0.0), "undo": (0, 0.0)}
+        try:
+            self.lang1_hotkey = _parse_hotkey(data.get("lang1_hotkey") or DEFAULT_LANG1_HOTKEY)
+        except ValueError:
+            self.lang1_hotkey = _parse_hotkey(DEFAULT_LANG1_HOTKEY)
+        try:
+            self.lang2_hotkey = _parse_hotkey(data.get("lang2_hotkey") or DEFAULT_LANG2_HOTKEY)
+        except ValueError:
+            self.lang2_hotkey = _parse_hotkey(DEFAULT_LANG2_HOTKEY)
+        self.lang1_code = data.get("lang1_code") or DEFAULT_LANG1_CODE
+        self.lang2_code = data.get("lang2_code") or DEFAULT_LANG2_CODE
+
+        self.hotkey_down = {"optimize": False, "undo": False, "lang1": False, "lang2": False}
+        self.tap_state = {"optimize": (0, 0.0), "undo": (0, 0.0), "lang1": (0, 0.0), "lang2": (0, 0.0)}
 
     @objc.python_method
     def _update_hotkey_tooltips(self) -> None:
@@ -755,7 +823,12 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _needs_key_event_tap(self) -> bool:
-        return self.optimize_hotkey.kind == "key" or self.undo_hotkey.kind == "key"
+        return (
+            self.optimize_hotkey.kind == "key"
+            or self.undo_hotkey.kind == "key"
+            or self.lang1_hotkey.kind == "key"
+            or self.lang2_hotkey.kind == "key"
+        )
 
     @objc.python_method
     def _sync_key_event_tap(self) -> None:
@@ -810,6 +883,12 @@ class JustSayingApp(NSObject):
             if action == "undo":
                 AppHelper.callAfter(self._start_undo)
                 return None
+            if action == "lang1":
+                AppHelper.callAfter(self._start_optimize, self.lang1_code)
+                return None
+            if action == "lang2":
+                AppHelper.callAfter(self._start_optimize, self.lang2_code)
+                return None
 
             return event
 
@@ -823,14 +902,18 @@ class JustSayingApp(NSObject):
             None,
         )
         if self.key_event_tap is None:
-            self.needs_input_monitoring = True
-            self._set_status("This hotkey needs Input Monitoring permission.")
-            if show_notice:
-                self._show_permission_notice(
-                    "input-monitoring",
-                    "Hotkey Needs Input Monitoring",
-                    "Open macOS Input Monitoring settings and turn on KnowSayin, or change the hotkey back to option+shift. The default option+shift hotkey does not need Input Monitoring.",
-                )
+            if AXIsProcessTrusted():
+                self.needs_input_monitoring = True
+                self._set_status("This hotkey needs Input Monitoring permission.")
+                if show_notice:
+                    self._show_permission_notice(
+                        "input-monitoring",
+                        "Hotkey Needs Input Monitoring",
+                        "Open macOS Input Monitoring settings and turn on KnowSayin, or change the hotkey back to option+shift. The default option+shift hotkey does not need Input Monitoring.",
+                    )
+            else:
+                self.needs_accessibility = True
+                self.needs_input_monitoring = False
             return
 
         self.needs_input_monitoring = False
@@ -877,6 +960,8 @@ class JustSayingApp(NSObject):
         for action, hotkey in (
             ("optimize", self.optimize_hotkey),
             ("undo", self.undo_hotkey),
+            ("lang1", self.lang1_hotkey),
+            ("lang2", self.lang2_hotkey),
         ):
             if hotkey.kind == "key" and self._matches_key_hotkey(event, hotkey):
                 return action
@@ -904,6 +989,8 @@ class JustSayingApp(NSObject):
         for action, hotkey in (
             ("optimize", self.optimize_hotkey),
             ("undo", self.undo_hotkey),
+            ("lang1", self.lang1_hotkey),
+            ("lang2", self.lang2_hotkey),
         ):
             if hotkey.kind == "modifier":
                 self._handle_modifier_combo(action, hotkey, flags)
@@ -946,6 +1033,10 @@ class JustSayingApp(NSObject):
             self._start_optimize()
         elif action == "undo":
             self._start_undo()
+        elif action == "lang1":
+            self._start_optimize(self.lang1_code)
+        elif action == "lang2":
+            self._start_optimize(self.lang2_code)
 
     @objc.python_method
     def _refresh_cloud_quota_async(self) -> None:
@@ -1256,7 +1347,7 @@ class JustSayingApp(NSObject):
             return
 
         width = 660
-        height = 330
+        height = 490
         screen = NSScreen.mainScreen().visibleFrame()
         x = screen.origin.x + screen.size.width - width - 48
         y = screen.origin.y + screen.size.height - height - 70
@@ -1280,36 +1371,76 @@ class JustSayingApp(NSObject):
         content.setWantsLayer_(True)
         content.layer().setBackgroundColor_(NSColor.windowBackgroundColor().CGColor())
 
-        self._label(content, _localized("Quota refill", "额度回血"), 20, 272, 100, 18)
-        self.settings_quota_label = self._value_label(content, self._quota_text(), 132, 272, 238, 18)
+        self._label(content, _localized("Quota refill", "额度回血"), 20, 432, 100, 18)
+        self.settings_quota_label = self._value_label(content, self._quota_text(), 132, 432, 238, 18)
 
         self._build_credit_snack_card(content)
 
-        self._label(content, "Optimize", 20, 226, 100, 18)
+        # Optimize Row
+        self._label(content, "Optimize", 20, 386, 100, 18)
         self.optimize_hotkey_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 220, 170, 26),
+            NSMakeRect(132, 380, 238, 26),
         )
         self.optimize_hotkey_field.setPlaceholderString_(_localized("Press shortcut", "按下快捷键"))
         self.optimize_hotkey_field.setDelegate_(self)
         content.addSubview_(self.optimize_hotkey_field)
-        self._label(content, _localized("Click field, then press keys", "点输入框后直接按快捷键"), 132, 200, 238, 18)
+        self._label(content, _localized("Click field, then press keys", "点输入框后直接按快捷键"), 132, 360, 238, 18)
 
-        self._label(content, "Undo", 20, 172, 100, 18)
+        # Undo Row
+        self._label(content, "Undo", 20, 332, 100, 18)
         self.undo_hotkey_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 166, 170, 26),
+            NSMakeRect(132, 326, 238, 26),
         )
         self.undo_hotkey_field.setPlaceholderString_(_localized("Press shortcut", "按下快捷键"))
         self.undo_hotkey_field.setDelegate_(self)
         content.addSubview_(self.undo_hotkey_field)
-        self._label(content, _localized("Tap Option three times for option*3", "连续按三次 Option 可设为 option*3"), 132, 146, 250, 18)
+        self._label(content, _localized("Tap Option three times for option*3", "连续按三次 Option 可设为 option*3"), 132, 306, 250, 18)
 
-        self._label(content, _localized("Share", "分享"), 20, 106, 100, 18)
-        share_button = self._button(_localized("Share KnowSayin", "分享 KnowSayin"), "openShare:", 132, 100, 170)
+        # Language 1 Row
+        self._label(content, _localized("Language 1", "语言 1"), 20, 266, 100, 18)
+        self.lang1_pop_up = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(132, 260, 110, 26),
+            False,
+        )
+        for code, label in SUPPORTED_LANGUAGES:
+            self.lang1_pop_up.addItemWithTitle_(label)
+        content.addSubview_(self.lang1_pop_up)
+
+        self.lang1_hotkey_field = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(252, 260, 118, 26),
+        )
+        self.lang1_hotkey_field.setPlaceholderString_(_localized("Press shortcut", "按下快捷键"))
+        self.lang1_hotkey_field.setDelegate_(self)
+        content.addSubview_(self.lang1_hotkey_field)
+        self._label(content, _localized("e.g. Option + 1 for Chinese", "例如 Option + 1 整理为中文"), 132, 240, 238, 18)
+
+        # Language 2 Row
+        self._label(content, _localized("Language 2", "语言 2"), 20, 200, 100, 18)
+        self.lang2_pop_up = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(132, 194, 110, 26),
+            False,
+        )
+        for code, label in SUPPORTED_LANGUAGES:
+            self.lang2_pop_up.addItemWithTitle_(label)
+        content.addSubview_(self.lang2_pop_up)
+
+        self.lang2_hotkey_field = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(252, 194, 118, 26),
+        )
+        self.lang2_hotkey_field.setPlaceholderString_(_localized("Press shortcut", "按下快捷键"))
+        self.lang2_hotkey_field.setDelegate_(self)
+        content.addSubview_(self.lang2_hotkey_field)
+        self._label(content, _localized("e.g. Option + 2 for English", "例如 Option + 2 整理为英文"), 132, 174, 238, 18)
+
+        # Share Row
+        self._label(content, _localized("Share", "分享"), 20, 126, 100, 18)
+        share_button = self._button(_localized("Share KnowSayin", "分享 KnowSayin"), "openShare:", 132, 120, 170)
         content.addSubview_(share_button)
-        self._label(content, _localized("Copy install messages for friends", "复制给朋友的安装分享内容"), 132, 80, 250, 18)
+        self._label(content, _localized("Copy install messages for friends", "复制给朋友的安装分享内容"), 132, 100, 250, 18)
 
-        self.save_settings_button = self._button(_localized("Save", "保存"), "saveSettings:", 132, 38, 90)
-        cancel_button = self._button(_localized("Cancel", "取消"), "cancelSettings:", 232, 38, 90)
+        # Action Buttons
+        self.save_settings_button = self._button(_localized("Save", "保存"), "saveSettings:", 132, 48, 90)
+        cancel_button = self._button(_localized("Cancel", "取消"), "cancelSettings:", 232, 48, 90)
         content.addSubview_(self.save_settings_button)
         content.addSubview_(cancel_button)
 
@@ -1421,7 +1552,7 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _build_credit_snack_card(self, content) -> None:
-        card = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(392, 150, 248, 144))
+        card = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(392, 310, 248, 144))
         card.setMaterial_(_appkit_constant("NSVisualEffectMaterialSidebar", "NSVisualEffectMaterialPopover"))
         card.setBlendingMode_(_appkit_constant("NSVisualEffectBlendingModeWithinWindow", "NSVisualEffectBlendingModeBehindWindow"))
         card.setState_(_appkit_constant("NSVisualEffectStateActive", "NSVisualEffectStateActive"))
@@ -1435,14 +1566,14 @@ class JustSayingApp(NSObject):
             content,
             _localized("Quick credit", "夸夸补给站"),
             406,
-            264,
+            424,
             220,
             18,
         )
-        self.credit_snack_question_label = self._value_label(content, "", 406, 228, 220, 32)
+        self.credit_snack_question_label = self._value_label(content, "", 406, 388, 220, 32)
         self.credit_snack_question_label.setLineBreakMode_(0)
-        self.credit_snack_first_button = self._button("", "answerCreditSnackFirst:", 406, 194, 102)
-        self.credit_snack_second_button = self._button("", "answerCreditSnackSecond:", 520, 194, 102)
+        self.credit_snack_first_button = self._button("", "answerCreditSnackFirst:", 406, 354, 102)
+        self.credit_snack_second_button = self._button("", "answerCreditSnackSecond:", 520, 354, 102)
         content.addSubview_(self.credit_snack_first_button)
         content.addSubview_(self.credit_snack_second_button)
         self.credit_answer_buttons = [self.credit_snack_first_button, self.credit_snack_second_button]
@@ -1453,13 +1584,13 @@ class JustSayingApp(NSObject):
                 f"答一题赢 {CREDIT_GAME_DELTA} 个 credits。",
             ),
         )
-        self.credit_snack_status.setFrame_(NSMakeRect(406, 176, 220, 14))
+        self.credit_snack_status.setFrame_(NSMakeRect(406, 336, 220, 14))
         self.credit_snack_status.setFont_(NSFont.systemFontOfSize_(11))
         self.credit_snack_status.setTextColor_(NSColor.secondaryLabelColor())
         self.credit_snack_status.setLineBreakMode_(0)
         content.addSubview_(self.credit_snack_status)
         self.credit_snack_countdown = NSTextField.labelWithString_("")
-        self.credit_snack_countdown.setFrame_(NSMakeRect(406, 158, 220, 14))
+        self.credit_snack_countdown.setFrame_(NSMakeRect(406, 318, 220, 14))
         if hasattr(NSFont, "monospacedDigitSystemFontOfSize_weight_"):
             countdown_font = NSFont.monospacedDigitSystemFontOfSize_weight_(11, 0.34)
         else:
@@ -1676,6 +1807,29 @@ class JustSayingApp(NSObject):
         data = load_model_settings()
         self.optimize_hotkey_field.setStringValue_(data["optimize_hotkey"] or DEFAULT_OPTIMIZE_HOTKEY)
         self.undo_hotkey_field.setStringValue_(data["undo_hotkey"] or DEFAULT_UNDO_HOTKEY)
+        
+        # Load language hotkeys
+        self.lang1_hotkey_field.setStringValue_(data["lang1_hotkey"] or DEFAULT_LANG1_HOTKEY)
+        self.lang2_hotkey_field.setStringValue_(data["lang2_hotkey"] or DEFAULT_LANG2_HOTKEY)
+
+        # Select corresponding dropdown items
+        loaded_lang1 = data.get("lang1_code") or DEFAULT_LANG1_CODE
+        loaded_lang2 = data.get("lang2_code") or DEFAULT_LANG2_CODE
+
+        lang1_idx = 0
+        for idx, (code, label) in enumerate(SUPPORTED_LANGUAGES):
+            if code == loaded_lang1:
+                lang1_idx = idx
+                break
+        self.lang1_pop_up.selectItemAtIndex_(lang1_idx)
+
+        lang2_idx = 0
+        for idx, (code, label) in enumerate(SUPPORTED_LANGUAGES):
+            if code == loaded_lang2:
+                lang2_idx = idx
+                break
+        self.lang2_pop_up.selectItemAtIndex_(lang2_idx)
+
         self.settings_status.setStringValue_(
             _localized("Click a shortcut field, then press the shortcut.", "点快捷键输入框，然后直接按你要设置的快捷键。"),
         )
@@ -1696,21 +1850,38 @@ class JustSayingApp(NSObject):
     def _validate_settings_fields(self, success_message: str | None = None) -> bool:
         optimize_hotkey = str(self.optimize_hotkey_field.stringValue()).strip() or DEFAULT_OPTIMIZE_HOTKEY
         undo_hotkey = str(self.undo_hotkey_field.stringValue()).strip() or DEFAULT_UNDO_HOTKEY
+        lang1_hotkey = str(self.lang1_hotkey_field.stringValue()).strip() or DEFAULT_LANG1_HOTKEY
+        lang2_hotkey = str(self.lang2_hotkey_field.stringValue()).strip() or DEFAULT_LANG2_HOTKEY
 
         try:
             optimize_spec = _parse_hotkey(optimize_hotkey)
             undo_spec = _parse_hotkey(undo_hotkey)
+            lang1_spec = _parse_hotkey(lang1_hotkey)
+            lang2_spec = _parse_hotkey(lang2_hotkey)
         except ValueError as exc:
             self.settings_status.setStringValue_(
                 _localized(f"Shortcut error: {exc}", f"快捷键错误：{exc}"),
             )
             return False
 
-        if _same_hotkey(optimize_spec, undo_spec):
-            self.settings_status.setStringValue_(
-                _localized("Optimize and Undo cannot use the same shortcut.", "Optimize 和 Undo 不能使用同一个快捷键。"),
-            )
-            return False
+        # Check duplicate hotkeys
+        specs = [optimize_spec, undo_spec, lang1_spec, lang2_spec]
+        labels = [
+            _localized("Optimize", "Optimize"),
+            _localized("Undo", "Undo"),
+            _localized("Language 1", "语言 1"),
+            _localized("Language 2", "语言 2"),
+        ]
+        for i in range(len(specs)):
+            for j in range(i + 1, len(specs)):
+                if _same_hotkey(specs[i], specs[j]):
+                    self.settings_status.setStringValue_(
+                        _localized(
+                            f"{labels[i]} and {labels[j]} cannot use the same shortcut.",
+                            f"{labels[i]} 和 {labels[j]} 不能使用同一个快捷键。",
+                        )
+                    )
+                    return False
 
         if success_message:
             self.settings_status.setStringValue_(success_message)
@@ -2018,7 +2189,15 @@ def _format_hotkey(modifiers: frozenset[str], key: str | None = None) -> str:
 
 
 def _hotkey_action_label(action: str) -> str:
-    return "Optimize" if action == "optimize" else "Undo"
+    if action == "optimize":
+        return "Optimize"
+    elif action == "undo":
+        return "Undo"
+    elif action == "lang1":
+        return _localized("Language 1", "语言 1")
+    elif action == "lang2":
+        return _localized("Language 2", "语言 2")
+    return action
 
 
 def _format_refill_time(value: str) -> str:

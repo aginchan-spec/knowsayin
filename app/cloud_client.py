@@ -30,16 +30,21 @@ class CloudAPIError(RuntimeError):
         return self.message or self.code
 
 
-def clean_prompt_with_cloud(text: str, mode: Mode, base_url: str = DEFAULT_CLOUD_API_BASE_URL) -> str:
+def clean_prompt_with_cloud(
+    text: str,
+    mode: Mode,
+    base_url: str = DEFAULT_CLOUD_API_BASE_URL,
+    target_lang: str | None = None,
+) -> str:
     token = load_cloud_session_token() or create_session(base_url)["token"]
     try:
-        return _clean_with_token(text, mode, base_url, token)
+        return _clean_with_token(text, mode, base_url, token, target_lang=target_lang)
     except CloudAPIError as exc:
         if exc.status not in {401, 403}:
             raise
         save_cloud_session_token("")
         token = create_session(base_url)["token"]
-        return _clean_with_token(text, mode, base_url, token)
+        return _clean_with_token(text, mode, base_url, token, target_lang=target_lang)
 
 
 def get_cloud_usage(base_url: str = DEFAULT_CLOUD_API_BASE_URL) -> dict[str, Any]:
@@ -87,11 +92,21 @@ def _usage_with_token(base_url: str, token: str) -> dict[str, Any]:
     return _request_json("POST", "/v1/usage", {}, base_url, token=token)
 
 
-def _clean_with_token(text: str, mode: Mode, base_url: str, token: str) -> str:
+def _clean_with_token(
+    text: str,
+    mode: Mode,
+    base_url: str,
+    token: str,
+    target_lang: str | None = None,
+) -> str:
+    body = {"text": text, "mode": mode}
+    if target_lang:
+        body["targetLang"] = target_lang
+
     payload = _request_json(
         "POST",
         "/v1/clean",
-        {"text": text, "mode": mode},
+        body,
         base_url,
         token=token,
     )
