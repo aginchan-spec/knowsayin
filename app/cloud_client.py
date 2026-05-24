@@ -54,6 +54,22 @@ def get_cloud_usage(base_url: str = DEFAULT_CLOUD_API_BASE_URL) -> dict[str, Any
         return _usage_with_token(base_url, token)
 
 
+def submit_credit_game(
+    question_id: str,
+    answer: str,
+    base_url: str = DEFAULT_CLOUD_API_BASE_URL,
+) -> dict[str, Any]:
+    token = load_cloud_session_token() or create_session(base_url)["token"]
+    try:
+        return _credit_game_with_token(base_url, token, question_id, answer)
+    except CloudAPIError as exc:
+        if exc.status not in {401, 403}:
+            raise
+        save_cloud_session_token("")
+        token = create_session(base_url)["token"]
+        return _credit_game_with_token(base_url, token, question_id, answer)
+
+
 def get_cloud_config(base_url: str = DEFAULT_CLOUD_API_BASE_URL) -> dict[str, Any]:
     return _request_json("GET", "/v1/config", None, base_url)
 
@@ -83,6 +99,16 @@ def _clean_with_token(text: str, mode: Mode, base_url: str, token: str) -> str:
     if not result:
         raise CloudAPIError("EMPTY_RESULT", "Cloud returned an empty result.", 502)
     return result
+
+
+def _credit_game_with_token(base_url: str, token: str, question_id: str, answer: str) -> dict[str, Any]:
+    return _request_json(
+        "POST",
+        "/v1/credit-game",
+        {"questionId": question_id, "answer": answer},
+        base_url,
+        token=token,
+    )
 
 
 def _request_json(
@@ -150,5 +176,8 @@ def _cloud_error_message(code: str, status: int) -> str:
         "EMPTY_BODY": "The cloud request was empty.",
         "BODY_TOO_LARGE": "The cloud request was too large.",
         "BAD_JSON": "The cloud request was invalid.",
+        "BAD_CREDIT_QUESTION": "That credit question is no longer available.",
+        "BAD_CREDIT_ANSWER": "That credit answer was not recognized.",
+        "CREDIT_GAME_COOLDOWN": "Quick credit is cooling down.",
     }
     return messages.get(code, f"Cloud request failed (HTTP {status}).")

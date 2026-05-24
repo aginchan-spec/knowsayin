@@ -50,6 +50,7 @@ from .model_config import (
     load_model_settings,
     save_desktop_settings,
 )
+from .credit_game import CreditQuestion, random_credit_question
 from .optimizer import optimize_prompt
 from .paste import CapturedText, capture_focused_text, replace_captured_text
 
@@ -99,6 +100,8 @@ class JustSayingApp(NSObject):
         self.cloud_plan = "free"
         self.quota_refreshing = False
         self.cloud_available = False
+        self.credit_question: CreditQuestion | None = None
+        self.credit_game_busy = False
         self.active_hotkey_capture: str | None = None
         self.hotkey_capture_flags: dict[str, int] = {"optimize": 0, "undo": 0}
         self.hotkey_capture_taps: dict[str, tuple[str, int, float]] = {
@@ -196,6 +199,12 @@ class JustSayingApp(NSObject):
 
     def copyShareAgent_(self, sender) -> None:
         self._copy_share_text("agent")
+
+    def answerCreditSnackFirst_(self, sender) -> None:
+        self._submit_credit_snack_answer(0)
+
+    def answerCreditSnackSecond_(self, sender) -> None:
+        self._submit_credit_snack_answer(1)
 
     def closeShare_(self, sender) -> None:
         if hasattr(self, "share_window"):
@@ -1231,8 +1240,8 @@ class JustSayingApp(NSObject):
             self._load_settings_into_fields()
             return
 
-        width = 520
-        height = 310
+        width = 660
+        height = 330
         screen = NSScreen.mainScreen().visibleFrame()
         x = screen.origin.x + screen.size.width - width - 48
         y = screen.origin.y + screen.size.height - height - 70
@@ -1256,41 +1265,43 @@ class JustSayingApp(NSObject):
         content.setWantsLayer_(True)
         content.layer().setBackgroundColor_(NSColor.windowBackgroundColor().CGColor())
 
-        self._label(content, _localized("Quota refill", "额度回血"), 20, 252, 100, 18)
-        self.settings_quota_label = self._value_label(content, self._quota_text(), 132, 252, 348, 18)
+        self._label(content, _localized("Quota refill", "额度回血"), 20, 272, 100, 18)
+        self.settings_quota_label = self._value_label(content, self._quota_text(), 132, 272, 238, 18)
 
-        self._label(content, "Optimize", 20, 208, 100, 18)
+        self._build_credit_snack_card(content)
+
+        self._label(content, "Optimize", 20, 226, 100, 18)
         self.optimize_hotkey_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 202, 170, 26),
+            NSMakeRect(132, 220, 170, 26),
         )
         self.optimize_hotkey_field.setPlaceholderString_(_localized("Press shortcut", "按下快捷键"))
         self.optimize_hotkey_field.setDelegate_(self)
         content.addSubview_(self.optimize_hotkey_field)
-        self._label(content, _localized("Click field, then press keys", "点输入框后直接按快捷键"), 314, 207, 180, 18)
+        self._label(content, _localized("Click field, then press keys", "点输入框后直接按快捷键"), 132, 200, 238, 18)
 
-        self._label(content, "Undo", 20, 166, 100, 18)
+        self._label(content, "Undo", 20, 172, 100, 18)
         self.undo_hotkey_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(132, 160, 170, 26),
+            NSMakeRect(132, 166, 170, 26),
         )
         self.undo_hotkey_field.setPlaceholderString_(_localized("Press shortcut", "按下快捷键"))
         self.undo_hotkey_field.setDelegate_(self)
         content.addSubview_(self.undo_hotkey_field)
-        self._label(content, _localized("Tap Option three times for option*3", "连续按三次 Option 可设为 option*3"), 314, 165, 190, 18)
+        self._label(content, _localized("Tap Option three times for option*3", "连续按三次 Option 可设为 option*3"), 132, 146, 250, 18)
 
-        self._label(content, _localized("Share", "分享"), 20, 118, 100, 18)
-        share_button = self._button(_localized("Share KnowSayin", "分享 KnowSayin"), "openShare:", 132, 112, 170)
+        self._label(content, _localized("Share", "分享"), 20, 106, 100, 18)
+        share_button = self._button(_localized("Share KnowSayin", "分享 KnowSayin"), "openShare:", 132, 100, 170)
         content.addSubview_(share_button)
-        self._label(content, _localized("Copy install messages for friends", "复制给朋友的安装分享内容"), 314, 117, 180, 18)
+        self._label(content, _localized("Copy install messages for friends", "复制给朋友的安装分享内容"), 132, 80, 250, 18)
 
-        self.save_settings_button = self._button(_localized("Save", "保存"), "saveSettings:", 132, 62, 90)
-        cancel_button = self._button(_localized("Cancel", "取消"), "cancelSettings:", 232, 62, 90)
+        self.save_settings_button = self._button(_localized("Save", "保存"), "saveSettings:", 132, 38, 90)
+        cancel_button = self._button(_localized("Cancel", "取消"), "cancelSettings:", 232, 38, 90)
         content.addSubview_(self.save_settings_button)
         content.addSubview_(cancel_button)
 
         self.settings_status = NSTextField.labelWithString_(
             _localized("Click a shortcut field, then press the shortcut.", "点快捷键输入框，然后直接按你要设置的快捷键。"),
         )
-        self.settings_status.setFrame_(NSMakeRect(20, 18, 480, 28))
+        self.settings_status.setFrame_(NSMakeRect(20, 8, 620, 26))
         self.settings_status.setFont_(NSFont.systemFontOfSize_(12))
         self.settings_status.setTextColor_(NSColor.secondaryLabelColor())
         self.settings_status.setLineBreakMode_(0)
@@ -1394,6 +1405,158 @@ class JustSayingApp(NSObject):
         content.addSubview_(button)
 
     @objc.python_method
+    def _build_credit_snack_card(self, content) -> None:
+        card = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(392, 176, 248, 118))
+        card.setMaterial_(_appkit_constant("NSVisualEffectMaterialSidebar", "NSVisualEffectMaterialPopover"))
+        card.setBlendingMode_(_appkit_constant("NSVisualEffectBlendingModeWithinWindow", "NSVisualEffectBlendingModeBehindWindow"))
+        card.setState_(_appkit_constant("NSVisualEffectStateActive", "NSVisualEffectStateActive"))
+        card.setWantsLayer_(True)
+        card.layer().setCornerRadius_(8)
+        card.layer().setBorderWidth_(1)
+        card.layer().setBorderColor_(NSColor.separatorColor().CGColor())
+        content.addSubview_(card)
+
+        self.credit_snack_title = self._value_label(
+            content,
+            _localized("Quick credit", "夸夸补给站"),
+            406,
+            264,
+            220,
+            18,
+        )
+        self.credit_snack_question_label = self._value_label(content, "", 406, 228, 220, 32)
+        self.credit_snack_question_label.setLineBreakMode_(0)
+        self.credit_snack_first_button = self._button("", "answerCreditSnackFirst:", 406, 194, 102)
+        self.credit_snack_second_button = self._button("", "answerCreditSnackSecond:", 520, 194, 102)
+        content.addSubview_(self.credit_snack_first_button)
+        content.addSubview_(self.credit_snack_second_button)
+        self.credit_answer_buttons = [self.credit_snack_first_button, self.credit_snack_second_button]
+
+        self.credit_snack_status = NSTextField.labelWithString_(
+            _localized("Answer for 1 credit.", "答一题赢 1 个 credit。"),
+        )
+        self.credit_snack_status.setFrame_(NSMakeRect(406, 180, 220, 14))
+        self.credit_snack_status.setFont_(NSFont.systemFontOfSize_(11))
+        self.credit_snack_status.setTextColor_(NSColor.secondaryLabelColor())
+        self.credit_snack_status.setLineBreakMode_(0)
+        content.addSubview_(self.credit_snack_status)
+        self._choose_credit_snack_question()
+
+    @objc.python_method
+    def _choose_credit_snack_question(self) -> None:
+        self.credit_question = random_credit_question()
+        self._refresh_credit_snack_labels()
+
+    @objc.python_method
+    def _refresh_credit_snack_labels(self) -> None:
+        if not hasattr(self, "credit_snack_question_label"):
+            return
+        question = self.credit_question or random_credit_question()
+        self.credit_question = question
+        self.credit_snack_question_label.setStringValue_(_credit_question_text(question))
+        self.credit_snack_first_button.setTitle_(_credit_option_text(question.options[0]))
+        self.credit_snack_second_button.setTitle_(_credit_option_text(question.options[1]))
+        self._set_credit_snack_enabled(not self.credit_game_busy)
+
+    @objc.python_method
+    def _set_credit_snack_enabled(self, enabled: bool) -> None:
+        if not hasattr(self, "credit_answer_buttons"):
+            return
+        for button in self.credit_answer_buttons:
+            button.setEnabled_(enabled)
+
+    @objc.python_method
+    def _submit_credit_snack_answer(self, option_index: int) -> None:
+        if self.credit_game_busy:
+            return
+        question = self.credit_question
+        if question is None:
+            self._choose_credit_snack_question()
+            question = self.credit_question
+        if question is None or option_index < 0 or option_index >= len(question.options):
+            return
+        try:
+            model_config = get_active_model_config()
+        except Exception as exc:
+            self.credit_snack_status.setStringValue_(_localized(f"Cloud unavailable: {exc}", "云端暂不可用。"))
+            return
+        if not model_config.is_cloud:
+            self.credit_snack_status.setStringValue_(_localized("Quick credit needs KnowSayin Cloud.", "夸夸补给需要 KnowSayin Cloud。"))
+            return
+
+        answer = question.options[option_index].value
+        self.credit_game_busy = True
+        self._set_credit_snack_enabled(False)
+        self.credit_snack_status.setStringValue_(_localized("Checking...", "正在判题..."))
+        threading.Thread(
+            target=self._credit_snack_worker,
+            args=(model_config.base_url, question.id, answer),
+            daemon=True,
+        ).start()
+
+    @objc.python_method
+    def _credit_snack_worker(self, base_url: str, question_id: str, answer: str) -> None:
+        try:
+            from .cloud_client import submit_credit_game
+
+            result = submit_credit_game(question_id, answer, base_url)
+            AppHelper.callAfter(self._finish_credit_snack, result)
+        except Exception as exc:
+            payload = getattr(exc, "payload", None)
+            AppHelper.callAfter(self._fail_credit_snack, str(exc), payload if isinstance(payload, dict) else {})
+
+    @objc.python_method
+    def _finish_credit_snack(self, result: dict) -> None:
+        self.credit_game_busy = False
+        self._apply_quota_payload(result)
+        self._choose_credit_snack_question()
+        correct = bool(result.get("correct"))
+        remaining = _int_or_none(result.get("remaining"))
+        quota_limit = _int_or_none(result.get("quotaLimit") or result.get("dailyLimit"))
+        quota_text = f" {remaining}/{quota_limit}" if remaining is not None and quota_limit is not None else ""
+        next_play = _format_refill_time(str(result.get("nextPlayAt") or ""))
+        if correct:
+            message = _localized(f"Correct. +1 credit.{quota_text}", f"答对了，+1 credit。{quota_text}")
+        else:
+            message = _localized(f"Nope. -1 credit.{quota_text}", f"答错了，-1 credit。{quota_text}")
+        if next_play:
+            message += _localized(f" Next {next_play}.", f" 下次 {next_play}。")
+        self.credit_snack_status.setStringValue_(message)
+        self._set_credit_snack_enabled(True)
+
+    @objc.python_method
+    def _fail_credit_snack(self, message: str, payload: dict) -> None:
+        self.credit_game_busy = False
+        self._apply_quota_payload(payload)
+        next_play = _format_refill_time(str(payload.get("nextPlayAt") or ""))
+        if str(payload.get("error") or "") == "CREDIT_GAME_COOLDOWN" and next_play:
+            text = _localized(f"Snack break. Try at {next_play}.", f"补给站休息中，{next_play} 再来。")
+        else:
+            text = _localized(f"Quick credit failed: {message}", f"夸夸补给失败：{message}")
+        self.credit_snack_status.setStringValue_(text)
+        self._set_credit_snack_enabled(True)
+
+    @objc.python_method
+    def _apply_quota_payload(self, payload: dict) -> None:
+        if not isinstance(payload, dict):
+            return
+        remaining = _int_or_none(payload.get("remaining"))
+        quota_limit = _int_or_none(payload.get("quotaLimit") or payload.get("dailyLimit"))
+        if remaining is not None:
+            self.quota_remaining = remaining
+        if quota_limit is not None:
+            self.quota_daily_limit = quota_limit
+        self.quota_refill_at = str(payload.get("refillAt") or payload.get("resetAt") or self.quota_refill_at or "")
+        self.machine_code = str(payload.get("deviceCode") or self.machine_code or "").strip().upper()
+        self.extra_url = str(payload.get("extraUrl") or self.extra_url or "https://knowsayin.com").strip()
+        self.cloud_plan = str(payload.get("plan") or self.cloud_plan or "free").strip().lower()
+        if remaining is not None and quota_limit is not None:
+            self.cloud_available = True
+        self._refresh_quota_label()
+        self._reset_optimize_title()
+        self._refresh_connection_indicator()
+
+    @objc.python_method
     def _copy_share_text(self, kind: str) -> None:
         text = _share_text(kind)
         pasteboard = NSPasteboard.generalPasteboard()
@@ -1420,6 +1583,11 @@ class JustSayingApp(NSObject):
         )
         if hasattr(self, "settings_quota_label"):
             self.settings_quota_label.setStringValue_(self._quota_text())
+        if hasattr(self, "credit_snack_question_label") and not self.credit_game_busy:
+            self._choose_credit_snack_question()
+            self.credit_snack_status.setStringValue_(
+                _localized("Answer for 1 credit.", "答一题赢 1 个 credit。"),
+            )
         self._refresh_cloud_quota_async()
 
     @objc.python_method
@@ -1730,6 +1898,14 @@ def _share_text(kind: str) -> str:
             "It cleans up rough dictated notes into clear AI prompts.",
         ],
     )
+
+
+def _credit_question_text(question: CreditQuestion) -> str:
+    return question.zh if _preferred_language() == "zh" else question.en
+
+
+def _credit_option_text(option) -> str:
+    return option.zh if _preferred_language() == "zh" else option.en
 
 
 def _format_hotkey(modifiers: frozenset[str], key: str | None = None) -> str:

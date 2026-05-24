@@ -19,6 +19,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from openai import OpenAI
 
 from .config import PROJECT_ROOT
+from .credit_game import evaluate_credit_answer
 from .model_config import APP_NAME, APP_VERSION, DEFAULT_OPTIMIZE_PROMPT
 from .optimizer import _optimize_user_message
 
@@ -47,6 +48,7 @@ class CloudSettings:
     extra_url: str
     grant_secret: str
     admin_secret: str
+    credit_game_cooldown_seconds: int
     usage_log_path: Path
 
 
@@ -103,6 +105,7 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                     "extraUrl": settings.extra_url,
                     "downloadUrl": settings.download_url,
                     "githubUrl": settings.github_url,
+                    "creditGameCooldownSeconds": settings.credit_game_cooldown_seconds,
                 }
             )
             return
@@ -124,6 +127,9 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
             return
         if path == "/v1/grant":
             self._handle_grant()
+            return
+        if path == "/v1/credit-game":
+            self._handle_credit_game()
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -426,6 +432,106 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
         )
         self._send_json({"error": "DEVICE_NOT_FOUND"}, HTTPStatus.NOT_FOUND)
 
+    def _handle_credit_game(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            return
+
+        question_id = str(payload.get("questionId") or "").strip()
+        answer = str(payload.get("answer") or "").strip()
+        correct = evaluate_credit_answer(question_id, answer)
+        settings = _load_settings()
+        if correct is None:
+            _log_usage_event(
+                self,
+                settings,
+                "credit_game_rejected",
+                status="error",
+                error="BAD_CREDIT_QUESTION",
+            )
+            self._send_json(
+                {
+                    "error": "BAD_CREDIT_QUESTION",
+                    "message": "That quick credit question is not available.",
+                },
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        access = self._resolve_access()
+        if isinstance(access, tuple):
+            _log_usage_event(
+                self,
+                settings,
+                "credit_game_rejected",
+                status="error",
+                error=access[0].get("error"),
+            )
+            self._send_json(access[0], access[1])
+            return
+
+        result = _apply_credit_game_result(access.token_hash, settings, correct)
+        if result.get("cooldown"):
+            _log_usage_event(
+                self,
+                settings,
+                "credit_game_rejected",
+                status="error",
+                error="CREDIT_GAME_COOLDOWN",
+                device_code=access.device_code,
+                remaining=result.get("remaining"),
+                quota_limit=access.quota_limit,
+            )
+            self._send_json(
+                {
+                    "error": "CREDIT_GAME_COOLDOWN",
+                    "message": "Quick credit is cooling down.",
+                    "remaining": result["remaining"],
+                    "dailyLimit": access.quota_limit,
+                    "quotaLimit": access.quota_limit,
+                    "refillSeconds": access.refill_seconds,
+                    "refillAt": result["refillAt"],
+                    "resetAt": result["refillAt"],
+                    "nextPlayAt": result["nextPlayAt"],
+                    "deviceCode": access.device_code,
+                    "extraUrl": access.extra_url,
+                    "plan": "free",
+                    "maxChars": settings.max_chars,
+                },
+                HTTPStatus.TOO_MANY_REQUESTS,
+            )
+            return
+
+        _log_usage_event(
+            self,
+            settings,
+            "credit_game_succeeded",
+            device_code=access.device_code,
+            questionId=question_id,
+            correct=correct,
+            delta=result["delta"],
+            remaining=result["remaining"],
+            quota_limit=access.quota_limit,
+        )
+        self._send_json(
+            {
+                "ok": True,
+                "correct": correct,
+                "delta": result["delta"],
+                "remaining": result["remaining"],
+                "dailyLimit": access.quota_limit,
+                "quotaLimit": access.quota_limit,
+                "refillSeconds": access.refill_seconds,
+                "refillAt": result["refillAt"],
+                "resetAt": result["refillAt"],
+                "nextPlayAt": result["nextPlayAt"],
+                "deviceCode": access.device_code,
+                "extraUrl": access.extra_url,
+                "plan": "free",
+                "maxChars": settings.max_chars,
+            }
+        )
+
     def _handle_admin_usage_stats(self, query: str) -> None:
         settings = _load_settings()
         admin_secret = settings.admin_secret or settings.grant_secret
@@ -543,6 +649,7 @@ def _load_settings() -> CloudSettings:
         extra_url=os.getenv("KNOWSAYIN_EXTRA_URL", "https://knowsayin.com").strip(),
         grant_secret=os.getenv("KNOWSAYIN_API_GRANT_SECRET", "").strip(),
         admin_secret=os.getenv("KNOWSAYIN_API_ADMIN_SECRET", "").strip(),
+        credit_game_cooldown_seconds=_env_int("KNOWSAYIN_API_CREDIT_GAME_COOLDOWN_SECONDS", 300),
         usage_log_path=Path(os.getenv("KNOWSAYIN_API_USAGE_LOG_PATH") or USAGE_LOG_PATH),
     )
 
@@ -624,6 +731,8 @@ def _usage_log_stats(path: Path, days: int = 0) -> dict[str, Any]:
             "cleanErrors": 0,
             "grants": 0,
             "grantErrors": 0,
+            "creditGames": 0,
+            "creditGameErrors": 0,
             "submittedChars": 0,
             "optimizedChars": 0,
             "uniqueIps": 0,
@@ -728,6 +837,8 @@ def _usage_bucket(buckets: dict[str, dict[str, Any]], key: str, key_name: str) -
             "cleanErrors": 0,
             "grants": 0,
             "grantErrors": 0,
+            "creditGames": 0,
+            "creditGameErrors": 0,
             "submittedChars": 0,
             "optimizedChars": 0,
             "firstSeenAt": "",
@@ -757,6 +868,10 @@ def _increment_bucket(bucket: dict[str, Any], event: str, status: str, chars: in
         bucket["grants"] = int(bucket.get("grants") or 0) + 1
     elif event.startswith("grant_") and status == "error":
         bucket["grantErrors"] = int(bucket.get("grantErrors") or 0) + 1
+    elif event == "credit_game_succeeded":
+        bucket["creditGames"] = int(bucket.get("creditGames") or 0) + 1
+    elif event.startswith("credit_game_") and status == "error":
+        bucket["creditGameErrors"] = int(bucket.get("creditGameErrors") or 0) + 1
 
     if entry.get("remaining") is not None:
         bucket["lastRemaining"] = entry.get("remaining")
@@ -904,6 +1019,54 @@ def _increment_usage(
             "chars": int(token_usage["chars"]),
             "remaining": int(float(token_usage["balance"])),
             "refillAt": refill_at,
+        }
+
+
+def _apply_credit_game_result(token_hash: str, settings: CloudSettings, correct: bool) -> dict[str, Any]:
+    with usage_lock:
+        payload = _read_data_file()
+        tokens = payload.setdefault("tokens", {})
+        token_usage = tokens.get(token_hash) or {}
+        balance, refill_at = _refill_quota_balance(token_usage, settings)
+        now = datetime.now(timezone.utc)
+        last_played_at = _parse_iso(str(token_usage.get("lastCreditGameAt") or ""))
+        cooldown_seconds = max(settings.credit_game_cooldown_seconds, 0)
+        if last_played_at is not None and cooldown_seconds > 0:
+            elapsed_seconds = max((now - last_played_at).total_seconds(), 0.0)
+            if elapsed_seconds < cooldown_seconds:
+                next_play_at = last_played_at + timedelta(seconds=cooldown_seconds)
+                token_usage["balance"] = balance
+                token_usage["quotaUpdatedAt"] = _now_iso()
+                tokens[token_hash] = token_usage
+                _write_data_file(payload)
+                return {
+                    "cooldown": True,
+                    "remaining": int(balance),
+                    "refillAt": refill_at,
+                    "nextPlayAt": next_play_at.isoformat(),
+                }
+
+        delta = 1 if correct else -1
+        new_balance = max(0.0, min(float(settings.quota_capacity), balance + delta))
+        token_usage["balance"] = round(new_balance, 6)
+        token_usage["quotaUpdatedAt"] = _now_iso()
+        token_usage["lastCreditGameAt"] = token_usage["quotaUpdatedAt"]
+        token_usage["creditGameCount"] = int(token_usage.get("creditGameCount") or 0) + 1
+        if correct:
+            token_usage["creditGameWins"] = int(token_usage.get("creditGameWins") or 0) + 1
+        else:
+            token_usage["creditGameLosses"] = int(token_usage.get("creditGameLosses") or 0) + 1
+        tokens[token_hash] = token_usage
+        _write_data_file(payload)
+
+        _, updated_refill_at = _refill_quota_balance(token_usage, settings)
+        next_play_at = now + timedelta(seconds=cooldown_seconds)
+        return {
+            "cooldown": False,
+            "delta": delta,
+            "remaining": int(float(token_usage["balance"])),
+            "refillAt": updated_refill_at,
+            "nextPlayAt": next_play_at.isoformat() if cooldown_seconds > 0 else "",
         }
 
 
