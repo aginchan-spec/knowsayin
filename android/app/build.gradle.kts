@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "com.knowsayin.android"
     compileSdk = 36
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.knowsayin.android"
@@ -15,6 +16,17 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags("-std=c++17")
+                arguments("-DANDROID_STL=c++_shared")
+            }
+        }
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -44,6 +56,13 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = false
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 }
