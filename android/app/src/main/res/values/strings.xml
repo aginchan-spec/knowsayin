@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KnowSayin</string>
+    <string name="ime_name">KnowSayin IME</string>
+    <string name="settings_title">KnowSayin Settings</string>
+    <string name="enable_ime">Enable KnowSayin Keyboard</string>
+    <string name="switch_ime">Switch Input Method</string>
+    <string name="privacy_disclosure">KnowSayin sends text to our cloud for cleaning. We never store raw text or voice recordings. Password fields are never sent.</string>
+    <string name="mic_permission_required">Microphone permission is required for voice input. Grant it in the next dialog.</string>
+    <string name="status_optimizing">optimizing…</string>
+    <string name="status_done">done</string>
+    <string name="status_cloud_error">cloud error</string>
+    <string name="status_quota_empty">quota empty</string>
+    <string name="status_skipped_sensitive">🔒 secured</string>
+    <string name="optimize_key">优化</string>
+    <string name="mic_key">麦克风</string>
+    <string name="undo_key">Undo</string>
+    <string name="cn_en_toggle">中/EN</string>
+</resources>

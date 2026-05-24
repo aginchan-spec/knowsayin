@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="KnowSayin"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/privacy_disclosure"
+        android:textSize="14sp"
+        android:layout_marginBottom="24dp"
+        android:lineSpacingExtra="4dp" />
+
+    <Button
+        android:id="@+id/btn_enable_ime"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/enable_ime"
+        android:layout_marginBottom="12dp" />
+
+    <Button
+        android:id="@+id/btn_switch_ime"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/switch_ime"
+        android:layout_marginBottom="12dp" />
+
+    <Button
+        android:id="@+id/btn_mic_permission"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Grant Microphone Permission"
+        android:layout_marginBottom="12dp" />
+
+</LinearLayout>
