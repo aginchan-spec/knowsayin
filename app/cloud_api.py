@@ -19,7 +19,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from openai import OpenAI
 
 from .config import PROJECT_ROOT
-from .credit_game import evaluate_credit_answer
+from .credit_game import CREDIT_GAME_DELTA, evaluate_credit_answer
 from .model_config import APP_NAME, APP_VERSION, DEFAULT_OPTIMIZE_PROMPT
 from .optimizer import _optimize_user_message
 
@@ -106,6 +106,7 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                     "downloadUrl": settings.download_url,
                     "githubUrl": settings.github_url,
                     "creditGameCooldownSeconds": settings.credit_game_cooldown_seconds,
+                    "creditGameCreditDelta": CREDIT_GAME_DELTA,
                 }
             )
             return
@@ -1046,7 +1047,7 @@ def _apply_credit_game_result(token_hash: str, settings: CloudSettings, correct:
                     "nextPlayAt": next_play_at.isoformat(),
                 }
 
-        delta = 1 if correct else -1
+        delta = CREDIT_GAME_DELTA if correct else -CREDIT_GAME_DELTA
         new_balance = max(0.0, min(float(settings.quota_capacity), balance + delta))
         token_usage["balance"] = round(new_balance, 6)
         token_usage["quotaUpdatedAt"] = _now_iso()

@@ -50,7 +50,7 @@ from .model_config import (
     load_model_settings,
     save_desktop_settings,
 )
-from .credit_game import CreditQuestion, random_credit_question
+from .credit_game import CREDIT_GAME_DELTA, CreditQuestion, random_credit_question
 from .optimizer import optimize_prompt
 from .paste import CapturedText, capture_focused_text, replace_captured_text
 
@@ -1433,7 +1433,10 @@ class JustSayingApp(NSObject):
         self.credit_answer_buttons = [self.credit_snack_first_button, self.credit_snack_second_button]
 
         self.credit_snack_status = NSTextField.labelWithString_(
-            _localized("Answer for 1 credit.", "答一题赢 1 个 credit。"),
+            _localized(
+                f"Answer for {CREDIT_GAME_DELTA} credits.",
+                f"答一题赢 {CREDIT_GAME_DELTA} 个 credits。",
+            ),
         )
         self.credit_snack_status.setFrame_(NSMakeRect(406, 180, 220, 14))
         self.credit_snack_status.setFont_(NSFont.systemFontOfSize_(11))
@@ -1516,9 +1519,15 @@ class JustSayingApp(NSObject):
         quota_text = f" {remaining}/{quota_limit}" if remaining is not None and quota_limit is not None else ""
         next_play = _format_refill_time(str(result.get("nextPlayAt") or ""))
         if correct:
-            message = _localized(f"Correct. +1 credit.{quota_text}", f"答对了，+1 credit。{quota_text}")
+            message = _localized(
+                f"Correct. +{CREDIT_GAME_DELTA} credits.{quota_text}",
+                f"答对了，+{CREDIT_GAME_DELTA} credits。{quota_text}",
+            )
         else:
-            message = _localized(f"Nope. -1 credit.{quota_text}", f"答错了，-1 credit。{quota_text}")
+            message = _localized(
+                f"Nope. -{CREDIT_GAME_DELTA} credits.{quota_text}",
+                f"答错了，-{CREDIT_GAME_DELTA} credits。{quota_text}",
+            )
         if next_play:
             message += _localized(f" Next {next_play}.", f" 下次 {next_play}。")
         self.credit_snack_status.setStringValue_(message)
@@ -1586,7 +1595,10 @@ class JustSayingApp(NSObject):
         if hasattr(self, "credit_snack_question_label") and not self.credit_game_busy:
             self._choose_credit_snack_question()
             self.credit_snack_status.setStringValue_(
-                _localized("Answer for 1 credit.", "答一题赢 1 个 credit。"),
+                _localized(
+                    f"Answer for {CREDIT_GAME_DELTA} credits.",
+                    f"答一题赢 {CREDIT_GAME_DELTA} 个 credits。",
+                ),
             )
         self._refresh_cloud_quota_async()
 

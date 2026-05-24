@@ -20,6 +20,9 @@ class CreditQuestion:
     correct_answer: str
 
 
+CREDIT_GAME_DELTA = 5
+
+
 CREDIT_QUESTIONS: tuple[CreditQuestion, ...] = (
     CreditQuestion(
         id="math_1_plus_1",
@@ -29,28 +32,35 @@ CREDIT_QUESTIONS: tuple[CreditQuestion, ...] = (
         correct_answer="2",
     ),
     CreditQuestion(
-        id="math_2_plus_3",
-        en="2 + 3 = ?",
-        zh="2 + 3 = ?",
-        options=(CreditOption("5", "5", "5"), CreditOption("6", "6", "6")),
+        id="math_2_plus_2",
+        en="2 + 2 = ?",
+        zh="2 + 2 = ?",
+        options=(CreditOption("4", "4", "4"), CreditOption("9", "9", "9")),
+        correct_answer="4",
+    ),
+    CreditQuestion(
+        id="math_5_bigger_than_2",
+        en="Which number is bigger?",
+        zh="哪个数字更大？",
+        options=(CreditOption("5", "5", "5"), CreditOption("2", "2", "2")),
         correct_answer="5",
     ),
     CreditQuestion(
-        id="math_5_minus_2",
-        en="5 - 2 = ?",
-        zh="5 - 2 = ?",
-        options=(CreditOption("3", "3", "3"), CreditOption("4", "4", "4")),
-        correct_answer="3",
+        id="week_days",
+        en="How many days are in a week?",
+        zh="一周有几天？",
+        options=(CreditOption("7", "7", "7"), CreditOption("3", "3", "3")),
+        correct_answer="7",
     ),
     CreditQuestion(
-        id="shortcut_optimize",
-        en="Default Optimize shortcut?",
-        zh="Optimize 默认快捷键？",
+        id="sun_day",
+        en="The sun is bright in the...",
+        zh="太阳通常白天会...",
         options=(
-            CreditOption("option_shift", "Option + Shift", "Option + Shift"),
-            CreditOption("command_q", "Command + Q", "Command + Q"),
+            CreditOption("day", "Day", "亮"),
+            CreditOption("pocket", "Pocket", "装进口袋"),
         ),
-        correct_answer="option_shift",
+        correct_answer="day",
     ),
     CreditQuestion(
         id="author_good",
@@ -61,15 +71,15 @@ CREDIT_QUESTIONS: tuple[CreditQuestion, ...] = (
     ),
     CreditQuestion(
         id="author_care",
-        en="Did the author put care into this little app?",
-        zh="作者是不是有点用心？",
+        en="Did the author try a little bit?",
+        zh="作者是不是有一点点用心？",
         options=(CreditOption("yes", "Yes", "是"), CreditOption("no", "No", "不是")),
         correct_answer="yes",
     ),
     CreditQuestion(
         id="kind_click",
-        en="Does this button deserve a kind click?",
-        zh="这个按钮是不是值得被温柔地点一下？",
+        en="Does this button deserve a nice click?",
+        zh="这个按钮是不是值得被点一下？",
         options=(CreditOption("yes", "Yes", "是"), CreditOption("no", "No", "不是")),
         correct_answer="yes",
     ),
