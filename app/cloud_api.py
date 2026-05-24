@@ -19,7 +19,12 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from openai import OpenAI
 
 from .config import PROJECT_ROOT
-from .credit_game import CREDIT_GAME_DELTA, evaluate_credit_answer
+from .credit_game import (
+    CREDIT_GAME_DELTA,
+    CREDIT_GAME_PLAYS_PER_WINDOW,
+    CREDIT_GAME_WINDOW_SECONDS,
+    evaluate_credit_answer,
+)
 from .model_config import APP_NAME, APP_VERSION, DEFAULT_OPTIMIZE_PROMPT
 from .optimizer import _optimize_user_message
 
@@ -49,6 +54,7 @@ class CloudSettings:
     grant_secret: str
     admin_secret: str
     credit_game_cooldown_seconds: int
+    credit_game_limit: int
     usage_log_path: Path
 
 
@@ -106,6 +112,8 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                     "downloadUrl": settings.download_url,
                     "githubUrl": settings.github_url,
                     "creditGameCooldownSeconds": settings.credit_game_cooldown_seconds,
+                    "creditGameWindowSeconds": settings.credit_game_cooldown_seconds,
+                    "creditGameLimit": settings.credit_game_limit,
                     "creditGameCreditDelta": CREDIT_GAME_DELTA,
                 }
             )
@@ -494,6 +502,10 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                     "refillAt": result["refillAt"],
                     "resetAt": result["refillAt"],
                     "nextPlayAt": result["nextPlayAt"],
+                    "creditGameResetAt": result["creditGameResetAt"],
+                    "creditGameRemainingPlays": result["creditGameRemainingPlays"],
+                    "creditGameLimit": result["creditGameLimit"],
+                    "creditGameWindowSeconds": result["creditGameWindowSeconds"],
                     "deviceCode": access.device_code,
                     "extraUrl": access.extra_url,
                     "plan": "free",
@@ -526,6 +538,10 @@ class KnowSayinCloudHandler(BaseHTTPRequestHandler):
                 "refillAt": result["refillAt"],
                 "resetAt": result["refillAt"],
                 "nextPlayAt": result["nextPlayAt"],
+                "creditGameResetAt": result["creditGameResetAt"],
+                "creditGameRemainingPlays": result["creditGameRemainingPlays"],
+                "creditGameLimit": result["creditGameLimit"],
+                "creditGameWindowSeconds": result["creditGameWindowSeconds"],
                 "deviceCode": access.device_code,
                 "extraUrl": access.extra_url,
                 "plan": "free",
@@ -650,7 +666,8 @@ def _load_settings() -> CloudSettings:
         extra_url=os.getenv("KNOWSAYIN_EXTRA_URL", "https://knowsayin.com").strip(),
         grant_secret=os.getenv("KNOWSAYIN_API_GRANT_SECRET", "").strip(),
         admin_secret=os.getenv("KNOWSAYIN_API_ADMIN_SECRET", "").strip(),
-        credit_game_cooldown_seconds=_env_int("KNOWSAYIN_API_CREDIT_GAME_COOLDOWN_SECONDS", 300),
+        credit_game_cooldown_seconds=_env_int("KNOWSAYIN_API_CREDIT_GAME_COOLDOWN_SECONDS", CREDIT_GAME_WINDOW_SECONDS),
+        credit_game_limit=_env_int("KNOWSAYIN_API_CREDIT_GAME_LIMIT", CREDIT_GAME_PLAYS_PER_WINDOW),
         usage_log_path=Path(os.getenv("KNOWSAYIN_API_USAGE_LOG_PATH") or USAGE_LOG_PATH),
     )
 
@@ -1030,28 +1047,45 @@ def _apply_credit_game_result(token_hash: str, settings: CloudSettings, correct:
         token_usage = tokens.get(token_hash) or {}
         balance, refill_at = _refill_quota_balance(token_usage, settings)
         now = datetime.now(timezone.utc)
-        last_played_at = _parse_iso(str(token_usage.get("lastCreditGameAt") or ""))
-        cooldown_seconds = max(settings.credit_game_cooldown_seconds, 0)
-        if last_played_at is not None and cooldown_seconds > 0:
-            elapsed_seconds = max((now - last_played_at).total_seconds(), 0.0)
-            if elapsed_seconds < cooldown_seconds:
-                next_play_at = last_played_at + timedelta(seconds=cooldown_seconds)
-                token_usage["balance"] = balance
-                token_usage["quotaUpdatedAt"] = _now_iso()
-                tokens[token_hash] = token_usage
-                _write_data_file(payload)
-                return {
-                    "cooldown": True,
-                    "remaining": int(balance),
-                    "refillAt": refill_at,
-                    "nextPlayAt": next_play_at.isoformat(),
-                }
+        window_seconds = max(settings.credit_game_cooldown_seconds, 0)
+        play_limit = max(settings.credit_game_limit, 1)
+        window_started_at = _parse_iso(str(token_usage.get("creditGameWindowStartedAt") or ""))
+        if window_started_at is None or (
+            window_seconds > 0 and max((now - window_started_at).total_seconds(), 0.0) >= window_seconds
+        ):
+            window_started_at = now
+            window_count = 0
+        else:
+            window_count = int(token_usage.get("creditGameWindowCount") or 0)
+
+        window_reset_at = window_started_at + timedelta(seconds=window_seconds) if window_seconds > 0 else now
+        if window_seconds > 0 and window_count >= play_limit:
+            token_usage["balance"] = balance
+            token_usage["quotaUpdatedAt"] = _now_iso()
+            token_usage["creditGameWindowStartedAt"] = window_started_at.isoformat()
+            token_usage["creditGameWindowCount"] = window_count
+            tokens[token_hash] = token_usage
+            _write_data_file(payload)
+            return {
+                "cooldown": True,
+                "remaining": int(balance),
+                "refillAt": refill_at,
+                "nextPlayAt": window_reset_at.isoformat(),
+                "creditGameResetAt": window_reset_at.isoformat(),
+                "creditGameRemainingPlays": 0,
+                "creditGameLimit": play_limit,
+                "creditGameWindowSeconds": window_seconds,
+            }
 
         delta = CREDIT_GAME_DELTA if correct else -CREDIT_GAME_DELTA
         new_balance = max(0.0, min(float(settings.quota_capacity), balance + delta))
+        window_count += 1
+        remaining_plays = max(play_limit - window_count, 0)
         token_usage["balance"] = round(new_balance, 6)
         token_usage["quotaUpdatedAt"] = _now_iso()
         token_usage["lastCreditGameAt"] = token_usage["quotaUpdatedAt"]
+        token_usage["creditGameWindowStartedAt"] = window_started_at.isoformat()
+        token_usage["creditGameWindowCount"] = window_count
         token_usage["creditGameCount"] = int(token_usage.get("creditGameCount") or 0) + 1
         if correct:
             token_usage["creditGameWins"] = int(token_usage.get("creditGameWins") or 0) + 1
@@ -1061,13 +1095,17 @@ def _apply_credit_game_result(token_hash: str, settings: CloudSettings, correct:
         _write_data_file(payload)
 
         _, updated_refill_at = _refill_quota_balance(token_usage, settings)
-        next_play_at = now + timedelta(seconds=cooldown_seconds)
+        next_play_at = window_reset_at if window_seconds > 0 and remaining_plays <= 0 else None
         return {
             "cooldown": False,
             "delta": delta,
             "remaining": int(float(token_usage["balance"])),
             "refillAt": updated_refill_at,
-            "nextPlayAt": next_play_at.isoformat() if cooldown_seconds > 0 else "",
+            "nextPlayAt": next_play_at.isoformat() if next_play_at else "",
+            "creditGameResetAt": window_reset_at.isoformat() if window_seconds > 0 else "",
+            "creditGameRemainingPlays": remaining_plays,
+            "creditGameLimit": play_limit,
+            "creditGameWindowSeconds": window_seconds,
         }
 
 

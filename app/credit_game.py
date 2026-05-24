@@ -21,6 +21,8 @@ class CreditQuestion:
 
 
 CREDIT_GAME_DELTA = 5
+CREDIT_GAME_WINDOW_SECONDS = 60
+CREDIT_GAME_PLAYS_PER_WINDOW = 2
 
 
 CREDIT_QUESTIONS: tuple[CreditQuestion, ...] = (

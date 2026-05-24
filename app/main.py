@@ -102,6 +102,11 @@ class JustSayingApp(NSObject):
         self.cloud_available = False
         self.credit_question: CreditQuestion | None = None
         self.credit_game_busy = False
+        self.credit_game_next_play_at = ""
+        self.credit_game_reset_at = ""
+        self.credit_game_remaining_plays: int | None = None
+        self.credit_game_limit = 2
+        self.credit_game_window_seconds = 60
         self.active_hotkey_capture: str | None = None
         self.hotkey_capture_flags: dict[str, int] = {"optimize": 0, "undo": 0}
         self.hotkey_capture_taps: dict[str, tuple[str, int, float]] = {
@@ -133,6 +138,13 @@ class JustSayingApp(NSObject):
             60.0,
             self,
             "refreshCloudStatus:",
+            None,
+            True,
+        )
+        self.credit_countdown_tracker = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            1.0,
+            self,
+            "refreshCreditSnackCountdown:",
             None,
             True,
         )
@@ -853,6 +865,9 @@ class JustSayingApp(NSObject):
     def refreshCloudStatus_(self, timer) -> None:
         self._refresh_cloud_quota_async()
 
+    def refreshCreditSnackCountdown_(self, timer) -> None:
+        self._refresh_credit_snack_countdown()
+
     @objc.python_method
     def _key_hotkey_action(self, event_type, event) -> str | None:
         if self._settings_visible():
@@ -1406,7 +1421,7 @@ class JustSayingApp(NSObject):
 
     @objc.python_method
     def _build_credit_snack_card(self, content) -> None:
-        card = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(392, 176, 248, 118))
+        card = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(392, 150, 248, 144))
         card.setMaterial_(_appkit_constant("NSVisualEffectMaterialSidebar", "NSVisualEffectMaterialPopover"))
         card.setBlendingMode_(_appkit_constant("NSVisualEffectBlendingModeWithinWindow", "NSVisualEffectBlendingModeBehindWindow"))
         card.setState_(_appkit_constant("NSVisualEffectStateActive", "NSVisualEffectStateActive"))
@@ -1438,12 +1453,23 @@ class JustSayingApp(NSObject):
                 f"答一题赢 {CREDIT_GAME_DELTA} 个 credits。",
             ),
         )
-        self.credit_snack_status.setFrame_(NSMakeRect(406, 180, 220, 14))
+        self.credit_snack_status.setFrame_(NSMakeRect(406, 176, 220, 14))
         self.credit_snack_status.setFont_(NSFont.systemFontOfSize_(11))
         self.credit_snack_status.setTextColor_(NSColor.secondaryLabelColor())
         self.credit_snack_status.setLineBreakMode_(0)
         content.addSubview_(self.credit_snack_status)
+        self.credit_snack_countdown = NSTextField.labelWithString_("")
+        self.credit_snack_countdown.setFrame_(NSMakeRect(406, 158, 220, 14))
+        if hasattr(NSFont, "monospacedDigitSystemFontOfSize_weight_"):
+            countdown_font = NSFont.monospacedDigitSystemFontOfSize_weight_(11, 0.34)
+        else:
+            countdown_font = NSFont.systemFontOfSize_(11)
+        self.credit_snack_countdown.setFont_(countdown_font)
+        self.credit_snack_countdown.setTextColor_(NSColor.secondaryLabelColor())
+        self.credit_snack_countdown.setLineBreakMode_(0)
+        content.addSubview_(self.credit_snack_countdown)
         self._choose_credit_snack_question()
+        self._refresh_credit_snack_countdown()
 
     @objc.python_method
     def _choose_credit_snack_question(self) -> None:
@@ -1466,7 +1492,56 @@ class JustSayingApp(NSObject):
         if not hasattr(self, "credit_answer_buttons"):
             return
         for button in self.credit_answer_buttons:
-            button.setEnabled_(enabled)
+            button.setEnabled_(enabled and not self._credit_snack_is_cooling_down())
+
+    @objc.python_method
+    def _credit_snack_is_cooling_down(self) -> bool:
+        return _seconds_until(self.credit_game_next_play_at) > 0
+
+    @objc.python_method
+    def _refresh_credit_snack_countdown(self) -> None:
+        if not hasattr(self, "credit_snack_countdown"):
+            return
+
+        next_play_seconds = _seconds_until(self.credit_game_next_play_at)
+        reset_seconds = _seconds_until(self.credit_game_reset_at)
+        if next_play_seconds > 0:
+            self.credit_snack_countdown.setStringValue_(
+                _localized(
+                    f"Refill in {_format_countdown(next_play_seconds)}",
+                    f"{_format_countdown(next_play_seconds)} 后回血",
+                ),
+            )
+            self._set_credit_snack_enabled(False)
+            return
+
+        if self.credit_game_next_play_at and next_play_seconds <= 0:
+            self.credit_game_next_play_at = ""
+            self.credit_game_remaining_plays = self.credit_game_limit
+            if not self.credit_game_busy:
+                self._choose_credit_snack_question()
+
+        if reset_seconds > 0 and self.credit_game_remaining_plays is not None:
+            self.credit_snack_countdown.setStringValue_(
+                _localized(
+                    f"{self.credit_game_remaining_plays}/{self.credit_game_limit} left · reset {_format_countdown(reset_seconds)}",
+                    f"还可答 {self.credit_game_remaining_plays}/{self.credit_game_limit} · {_format_countdown(reset_seconds)} 重置",
+                ),
+            )
+            self._set_credit_snack_enabled(not self.credit_game_busy)
+            return
+
+        if self.credit_game_reset_at and reset_seconds <= 0:
+            self.credit_game_reset_at = ""
+            self.credit_game_remaining_plays = self.credit_game_limit
+
+        self.credit_snack_countdown.setStringValue_(
+            _localized(
+                f"{self.credit_game_limit} questions/min · 1 min refill",
+                f"每分钟 {self.credit_game_limit} 题 · 1 分钟回血",
+            ),
+        )
+        self._set_credit_snack_enabled(not self.credit_game_busy)
 
     @objc.python_method
     def _submit_credit_snack_answer(self, option_index: int) -> None:
@@ -1517,7 +1592,6 @@ class JustSayingApp(NSObject):
         remaining = _int_or_none(result.get("remaining"))
         quota_limit = _int_or_none(result.get("quotaLimit") or result.get("dailyLimit"))
         quota_text = f" {remaining}/{quota_limit}" if remaining is not None and quota_limit is not None else ""
-        next_play = _format_refill_time(str(result.get("nextPlayAt") or ""))
         if correct:
             message = _localized(
                 f"Correct. +{CREDIT_GAME_DELTA} credits.{quota_text}",
@@ -1528,21 +1602,24 @@ class JustSayingApp(NSObject):
                 f"Nope. -{CREDIT_GAME_DELTA} credits.{quota_text}",
                 f"答错了，-{CREDIT_GAME_DELTA} credits。{quota_text}",
             )
-        if next_play:
-            message += _localized(f" Next {next_play}.", f" 下次 {next_play}。")
         self.credit_snack_status.setStringValue_(message)
+        self._refresh_credit_snack_countdown()
         self._set_credit_snack_enabled(True)
 
     @objc.python_method
     def _fail_credit_snack(self, message: str, payload: dict) -> None:
         self.credit_game_busy = False
         self._apply_quota_payload(payload)
-        next_play = _format_refill_time(str(payload.get("nextPlayAt") or ""))
-        if str(payload.get("error") or "") == "CREDIT_GAME_COOLDOWN" and next_play:
-            text = _localized(f"Snack break. Try at {next_play}.", f"补给站休息中，{next_play} 再来。")
+        remaining_seconds = _seconds_until(str(payload.get("nextPlayAt") or ""))
+        if str(payload.get("error") or "") == "CREDIT_GAME_COOLDOWN" and remaining_seconds > 0:
+            text = _localized(
+                f"Refill in {_format_countdown(remaining_seconds)}.",
+                f"{_format_countdown(remaining_seconds)} 后回血。",
+            )
         else:
             text = _localized(f"Quick credit failed: {message}", f"夸夸补给失败：{message}")
         self.credit_snack_status.setStringValue_(text)
+        self._refresh_credit_snack_countdown()
         self._set_credit_snack_enabled(True)
 
     @objc.python_method
@@ -1556,6 +1633,17 @@ class JustSayingApp(NSObject):
         if quota_limit is not None:
             self.quota_daily_limit = quota_limit
         self.quota_refill_at = str(payload.get("refillAt") or payload.get("resetAt") or self.quota_refill_at or "")
+        self.credit_game_next_play_at = str(payload.get("nextPlayAt") or self.credit_game_next_play_at or "")
+        self.credit_game_reset_at = str(payload.get("creditGameResetAt") or self.credit_game_reset_at or "")
+        remaining_plays = _int_or_none(payload.get("creditGameRemainingPlays"))
+        if remaining_plays is not None:
+            self.credit_game_remaining_plays = remaining_plays
+        limit = _int_or_none(payload.get("creditGameLimit"))
+        if limit is not None:
+            self.credit_game_limit = max(limit, 1)
+        window_seconds = _int_or_none(payload.get("creditGameWindowSeconds") or payload.get("creditGameCooldownSeconds"))
+        if window_seconds is not None:
+            self.credit_game_window_seconds = max(window_seconds, 0)
         self.machine_code = str(payload.get("deviceCode") or self.machine_code or "").strip().upper()
         self.extra_url = str(payload.get("extraUrl") or self.extra_url or "https://knowsayin.com").strip()
         self.cloud_plan = str(payload.get("plan") or self.cloud_plan or "free").strip().lower()
@@ -1564,6 +1652,7 @@ class JustSayingApp(NSObject):
         self._refresh_quota_label()
         self._reset_optimize_title()
         self._refresh_connection_indicator()
+        self._refresh_credit_snack_countdown()
 
     @objc.python_method
     def _copy_share_text(self, kind: str) -> None:
@@ -1600,6 +1689,7 @@ class JustSayingApp(NSObject):
                     f"答一题赢 {CREDIT_GAME_DELTA} 个 credits。",
                 ),
             )
+            self._refresh_credit_snack_countdown()
         self._refresh_cloud_quota_async()
 
     @objc.python_method
@@ -1941,6 +2031,23 @@ def _format_refill_time(value: str) -> str:
     if _preferred_language() == "zh":
         return parsed.astimezone().strftime("%H:%M")
     return parsed.astimezone().strftime("%-I:%M %p")
+
+
+def _seconds_until(value: str) -> int:
+    if not value:
+        return 0
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    now = datetime.now(parsed.tzinfo) if parsed.tzinfo else datetime.now()
+    return max(int((parsed - now).total_seconds() + 0.999), 0)
+
+
+def _format_countdown(seconds: int) -> str:
+    seconds = max(int(seconds), 0)
+    minutes, remaining_seconds = divmod(seconds, 60)
+    return f"{minutes:02d}:{remaining_seconds:02d}"
 
 
 def _active_modifier_names(flags: int, quartz: bool) -> frozenset[str]:
