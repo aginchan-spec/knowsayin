@@ -1,0 +1,17 @@
+# KnowSayin Rime default settings
+# encoding: utf-8
+
+config_version: "0.1.0"
+
+schema_list:
+  - schema: knowsayin_pinyin
+
+menu:
+  page_size: 5
+
+key_binder:
+  bindings: []
+
+recognizer:
+  patterns: {}
+

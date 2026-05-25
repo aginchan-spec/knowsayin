@@ -1,0 +1,26 @@
+# KnowSayin Rime punctuation preset
+# encoding: utf-8
+
+config_version: "0.1.0"
+
+punctuator:
+  half_shape:
+    ',' : { commit: ， }
+    '.' : { commit: 。 }
+    '?' : { commit: ？ }
+    '!' : { commit: ！ }
+    ';' : { commit: ； }
+    ':' : { commit: ： }
+    '''' : { pair: [ '‘', '’' ] }
+    '"' : { pair: [ '“', '”' ] }
+  full_shape:
+    ' ' : { commit: '　' }
+    ',' : { commit: ， }
+    '.' : { commit: 。 }
+    '?' : { commit: ？ }
+    '!' : { commit: ！ }
+    ';' : { commit: ； }
+    ':' : { commit: ： }
+    '''' : { pair: [ '‘', '’' ] }
+    '"' : { pair: [ '“', '”' ] }
+

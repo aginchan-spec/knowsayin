@@ -42,6 +42,14 @@ class StubRimeEngine : RimeEngine {
 
     override fun processKey(sessionId: Long, keycode: Int, mask: Int): Boolean {
         val session = sessions[sessionId] ?: return false
+        if (keycode == android.view.KeyEvent.KEYCODE_DEL || keycode == '\b'.code) {
+            if (session.inputBuffer.isNotEmpty()) {
+                session.inputBuffer.deleteAt(session.inputBuffer.length - 1)
+                session.updateCandidates()
+                return true
+            }
+            return false
+        }
         val ch = keycodeToChar(keycode) ?: return false
         session.inputBuffer.append(ch)
         session.updateCandidates()
@@ -82,6 +90,10 @@ class StubRimeEngine : RimeEngine {
 
     private fun keycodeToChar(keycode: Int): Char? {
         return when (keycode) {
+            in 'a'.code..'z'.code -> keycode.toChar()
+            in 'A'.code..'Z'.code -> keycode.toChar().lowercaseChar()
+            in '0'.code..'9'.code -> keycode.toChar()
+            ' '.code, '\''.code, ','.code, '.'.code -> keycode.toChar()
             in android.view.KeyEvent.KEYCODE_A..android.view.KeyEvent.KEYCODE_Z ->
                 ('a' + (keycode - android.view.KeyEvent.KEYCODE_A))
             android.view.KeyEvent.KEYCODE_SPACE -> ' '

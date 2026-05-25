@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import com.knowsayin.android.cloud.CleanResult
 import com.knowsayin.android.cloud.KnowSayinCloudClient
 import com.knowsayin.android.keyboard.KeyboardView
+import com.knowsayin.android.rime.JniRimeEngine
 import com.knowsayin.android.rime.RimeEngine
 import com.knowsayin.android.rime.StubRimeEngine
 import com.knowsayin.android.undo.UndoManager
@@ -40,9 +41,7 @@ class KnowSayinImeService : android.inputmethodservice.InputMethodService() {
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences("knowsayin_prefs", android.content.Context.MODE_PRIVATE)
-        rimeEngine = StubRimeEngine()
-        rimeEngine.initialize(filesDir.absolutePath + "/rime")
-        rimeSessionId = rimeEngine.createSession()
+        initializeRimeEngine()
         cloudClient = KnowSayinCloudClient(prefs)
         undoManager = UndoManager()
         voiceInputManager = VoiceInputManager(this)
@@ -57,6 +56,8 @@ class KnowSayinImeService : android.inputmethodservice.InputMethodService() {
         keyboardView = KeyboardView(this)
         keyboardView.listener = keyboardListener
         keyboardView.isChineseMode = isChineseMode
+        keyboardView.statusText = statusText
+        clearStatusAfterDelay()
         return keyboardView
     }
 
@@ -81,6 +82,24 @@ class KnowSayinImeService : android.inputmethodservice.InputMethodService() {
         keyboardView.candidates = emptyList()
         keyboardView.statusText = if (isSensitiveField()) getString(R.string.status_skipped_sensitive) else statusText
         keyboardView.invalidate()
+    }
+
+    private fun initializeRimeEngine() {
+        val nativeEngine = JniRimeEngine(this)
+        if (nativeEngine.initialize(filesDir.absolutePath + "/rime")) {
+            val sessionId = nativeEngine.createSession()
+            if (sessionId > 0) {
+                rimeEngine = nativeEngine
+                rimeSessionId = sessionId
+                return
+            }
+            nativeEngine.finalize()
+        }
+
+        val fallbackEngine = StubRimeEngine()
+        fallbackEngine.initialize(filesDir.absolutePath + "/rime")
+        rimeEngine = fallbackEngine
+        rimeSessionId = fallbackEngine.createSession()
     }
 
     private var currentInputType: Int = 0
@@ -149,8 +168,8 @@ class KnowSayinImeService : android.inputmethodservice.InputMethodService() {
         val ic = currentInputConnection ?: return
 
         if (isChineseMode) {
-            val kv = KeyEvent(KeyEvent.ACTION_DOWN, code)
-            rimeEngine.processKey(rimeSessionId, kv.keyCode, kv.metaState)
+            rimeEngine.processKey(rimeSessionId, code, 0)
+            flushRimeCommit()
             flushRimeContext()
         } else {
             val text = code.toChar().let {
@@ -172,6 +191,7 @@ class KnowSayinImeService : android.inputmethodservice.InputMethodService() {
         if (state.isComposing && state.composition.isNotEmpty()) {
             // Send backspace to rime
             rimeEngine.processKey(rimeSessionId, KeyEvent.KEYCODE_DEL, 0)
+            flushRimeCommit()
             flushRimeContext()
         } else {
             ic.deleteSurroundingText(1, 0)
@@ -180,13 +200,13 @@ class KnowSayinImeService : android.inputmethodservice.InputMethodService() {
 
     private fun handleEnter() {
         if (isChineseMode) {
-            // Commit current composition as-is before enter
             val state = rimeEngine.getContext(rimeSessionId)
             if (state.isComposing && state.composition.isNotEmpty()) {
-                val ic = currentInputConnection ?: return
-                ic.commitText(state.composition, 1)
-                // Clear rime buffer by selecting nothing
-                rimeEngine.selectCandidate(rimeSessionId, -1)
+                if (!rimeEngine.processKey(rimeSessionId, KeyEvent.KEYCODE_ENTER, 0)) {
+                    commitText(state.composition)
+                    rimeEngine.selectCandidate(rimeSessionId, -1)
+                }
+                flushRimeCommit()
                 flushRimeContext()
             }
         }
@@ -199,6 +219,8 @@ class KnowSayinImeService : android.inputmethodservice.InputMethodService() {
 
         if (state.isComposing && state.composition.isNotEmpty() && ic != null) {
             ic.setComposingText(state.composition, 1)
+        } else {
+            ic?.finishComposingText()
         }
 
         keyboardView.composition = if (state.isComposing) state.composition else ""

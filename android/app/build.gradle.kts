@@ -3,6 +3,11 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val knowsayinRimeRoot = providers.gradleProperty("knowsayinRimeRoot")
+    .orElse(providers.environmentVariable("KNOWSAYIN_RIME_ROOT"))
+    .orElse("/home/dnachan/build/knowsayin-rime/install")
+    .get()
+
 android {
     namespace = "com.knowsayin.android"
     compileSdk = 36
@@ -20,7 +25,10 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags("-std=c++17")
-                arguments("-DANDROID_STL=c++_static")
+                arguments(
+                    "-DANDROID_STL=c++_static",
+                    "-DKNOWSAYIN_RIME_ROOT=$knowsayinRimeRoot",
+                )
             }
         }
 
@@ -70,6 +78,7 @@ android {
 dependencies {
     // Unit test
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 
     // AndroidX core for IME service support
     implementation("androidx.core:core-ktx:1.15.0")

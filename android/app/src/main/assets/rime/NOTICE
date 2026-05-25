@@ -1,0 +1,73 @@
+KnowSayin IME — Third-Party Asset Notices
+==========================================
+
+rime-pinyin-simp
+----------------
+Copyright: Rime Developers and AOSP contributors
+License: Apache License 2.0
+Source: https://github.com/rime/rime-pinyin-simp
+Description: Simplified Chinese pinyin-to-hanzi dictionary,
+  derived from the Android Open Source Project PinyinIME.
+
+This dictionary is used as the primary input dictionary for
+KnowSayin Pinyin input method.
+
+A copy of the Apache License 2.0 is included in this directory
+as LICENSE.apache-2.0.
+
+---
+
+librime (linked engine)
+-----------------------
+Copyright: Rime Developers (https://rime.im)
+License: BSD 3-Clause
+Source: https://github.com/rime/librime
+
+KnowSayin links librime as the native input engine. The small
+default.yaml and symbols.yaml files in this asset directory are
+KnowSayin-authored minimal runtime presets for the KnowSayin schema.
+
+---
+
+OpenCC (linked library)
+-----------------------
+Copyright: OpenCC Developers
+License: Apache License 2.0
+Source: https://github.com/BYVoid/OpenCC
+
+OpenCC is linked as a static library. No OpenCC data files
+are bundled in this version.
+
+---
+
+marisa-trie (linked library)
+----------------------------
+Copyright: Susumu Yata and contributors
+License: BSD 2-Clause (elected; also available under LGPL-2.1+)
+Source: https://github.com/s-yata/marisa-trie
+
+KnowSayin elects the BSD 2-Clause license option.
+
+---
+
+yaml-cpp (linked library)
+--------------------------
+Copyright: Jesse Beder and contributors
+License: MIT
+Source: https://github.com/jbeder/yaml-cpp
+
+---
+
+LevelDB (linked library)
+-------------------------
+Copyright: Google Inc.
+License: BSD 3-Clause
+Source: https://github.com/google/leveldb
+
+---
+
+Boost C++ Libraries (linked library)
+-------------------------------------
+Copyright: Boost Authors
+License: Boost Software License 1.0
+Source: https://www.boost.org/
