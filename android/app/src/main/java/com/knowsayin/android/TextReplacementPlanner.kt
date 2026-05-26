@@ -5,12 +5,20 @@ import android.view.inputmethod.InputConnection
 object TextReplacementPlanner {
 
     const val MAX_BEFORE_CURSOR_CHARS = 500
+    const val MAX_AFTER_CURSOR_CHARS = 500
+
+    data class InputSnapshot(
+        val selectedText: String,
+        val beforeCursorText: String,
+        val afterCursorText: String
+    )
 
     data class ReplacementPlan(
         val textToClean: String,
         val beforeLength: Int,
         val afterLength: Int,
-        val isSelectedText: Boolean
+        val isSelectedText: Boolean,
+        val capturedSnapshot: InputSnapshot
     )
 
     fun planFromTexts(
@@ -18,17 +26,27 @@ object TextReplacementPlanner {
         beforeCursor: CharSequence?,
         maxChars: Int = MAX_BEFORE_CURSOR_CHARS
     ): ReplacementPlan? {
-        val selected = (selectedText ?: "").toString()
+        val snapshot = InputSnapshot(
+            selectedText = selectedText.asSnapshotText(),
+            beforeCursorText = beforeCursor.asSnapshotText().takeLast(maxChars),
+            afterCursorText = ""
+        )
+        return planFromSnapshot(snapshot)
+    }
+
+    fun planFromSnapshot(snapshot: InputSnapshot): ReplacementPlan? {
+        val selected = snapshot.selectedText
         if (selected.isNotEmpty() && selected.isNotBlank()) {
             return ReplacementPlan(
                 textToClean = selected.trim(),
                 beforeLength = selected.length,
                 afterLength = 0,
-                isSelectedText = true
+                isSelectedText = true,
+                capturedSnapshot = snapshot
             )
         }
 
-        val beforeText = (beforeCursor ?: "").toString()
+        val beforeText = snapshot.beforeCursorText
         if (beforeText.isBlank()) return null
 
         val trimmed = beforeText.trim()
@@ -36,16 +54,32 @@ object TextReplacementPlanner {
             textToClean = trimmed,
             beforeLength = beforeText.length,
             afterLength = 0,
-            isSelectedText = false
+            isSelectedText = false,
+            capturedSnapshot = snapshot
         )
     }
 
     fun plan(ic: InputConnection): ReplacementPlan? {
-        val selected = ic.getSelectedText(0)
-        val plan = planFromTexts(selected, null)
-        if (plan != null) return plan
+        return planFromSnapshot(snapshot(ic))
+    }
 
-        val before = ic.getTextBeforeCursor(MAX_BEFORE_CURSOR_CHARS, 0)
-        return planFromTexts(null, before)
+    fun snapshotMatchesPlan(plan: ReplacementPlan, currentSnapshot: InputSnapshot): Boolean {
+        return currentSnapshot == plan.capturedSnapshot
+    }
+
+    fun snapshotMatchesPlan(plan: ReplacementPlan, ic: InputConnection): Boolean {
+        return snapshotMatchesPlan(plan, snapshot(ic))
+    }
+
+    private fun snapshot(ic: InputConnection): InputSnapshot {
+        return InputSnapshot(
+            selectedText = ic.getSelectedText(0).asSnapshotText(),
+            beforeCursorText = ic.getTextBeforeCursor(MAX_BEFORE_CURSOR_CHARS, 0).asSnapshotText(),
+            afterCursorText = ic.getTextAfterCursor(MAX_AFTER_CURSOR_CHARS, 0).asSnapshotText()
+        )
+    }
+
+    private fun CharSequence?.asSnapshotText(): String {
+        return this?.toString() ?: ""
     }
 }

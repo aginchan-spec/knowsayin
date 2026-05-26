@@ -58,8 +58,10 @@ speller:
 
 translator:
   dictionary: pinyin_simp
-  enable_sentence: false
-  enable_user_dict: false
+  enable_completion: true
+  enable_word_completion: true
+  enable_sentence: true
+  enable_user_dict: true
   preedit_format:
     - "xform/([nl])v/$1ü/"
     - "xform/([jqx])v/$1u/"

@@ -153,23 +153,12 @@ std::string jsonString(const char* value) {
 
 std::string emptyContextJson() {
     return "{\"composition\":\"\",\"compositionCursor\":0,"
-           "\"candidates\":[],\"highlightedIndex\":0,\"isComposing\":false}";
+           "\"candidates\":[],\"highlightedIndex\":0,"
+           "\"pageSize\":0,\"pageNumber\":0,\"isLastPage\":true,"
+           "\"selectKeys\":\"\",\"isComposing\":false}";
 }
 
 int mapAndroidKeycodeToRime(int keycode) {
-    if (keycode >= 0x20 && keycode <= 0x7e) {
-        return keycode;
-    }
-    if (keycode >= AKEYCODE_A && keycode <= AKEYCODE_Z) {
-        return 'a' + (keycode - AKEYCODE_A);
-    }
-    if (keycode >= AKEYCODE_0 && keycode <= AKEYCODE_9) {
-        return '0' + (keycode - AKEYCODE_0);
-    }
-    if (keycode >= AKEYCODE_NUMPAD_0 && keycode <= AKEYCODE_NUMPAD_9) {
-        return '0' + (keycode - AKEYCODE_NUMPAD_0);
-    }
-
     switch (keycode) {
         case AKEYCODE_DEL:
             return XK_BackSpace;
@@ -238,8 +227,22 @@ int mapAndroidKeycodeToRime(int keycode) {
         case AKEYCODE_PAGE_DOWN:
             return XK_Page_Down;
         default:
-            return keycode;
+            break;
     }
+
+    if (keycode >= 0x20 && keycode <= 0x7e) {
+        return keycode;
+    }
+    if (keycode >= AKEYCODE_A && keycode <= AKEYCODE_Z) {
+        return 'a' + (keycode - AKEYCODE_A);
+    }
+    if (keycode >= AKEYCODE_0 && keycode <= AKEYCODE_9) {
+        return '0' + (keycode - AKEYCODE_0);
+    }
+    if (keycode >= AKEYCODE_NUMPAD_0 && keycode <= AKEYCODE_NUMPAD_9) {
+        return '0' + (keycode - AKEYCODE_NUMPAD_0);
+    }
+    return keycode;
 }
 
 int mapAndroidMetaStateToRime(int mask) {
@@ -490,6 +493,10 @@ Java_com_knowsayin_android_rime_RimeJniBridge_nativeGetContext(
     json << "{";
     json << "\"composition\":" << jsonString(context.composition.preedit) << ",";
     json << "\"compositionCursor\":" << context.composition.cursor_pos << ",";
+    json << "\"pageSize\":" << context.menu.page_size << ",";
+    json << "\"pageNumber\":" << context.menu.page_no << ",";
+    json << "\"isLastPage\":" << (context.menu.is_last_page ? "true" : "false") << ",";
+    json << "\"selectKeys\":" << jsonString(context.menu.select_keys) << ",";
     json << "\"candidates\":[";
     for (int i = 0; i < context.menu.num_candidates; ++i) {
         if (i > 0) {

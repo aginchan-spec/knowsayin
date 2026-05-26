@@ -9,6 +9,7 @@
     <string name="mic_permission_required">Microphone permission is required for voice input. Grant it in the next dialog.</string>
     <string name="status_optimizing">optimizing…</string>
     <string name="status_done">done</string>
+    <string name="status_text_changed">text changed</string>
     <string name="status_cloud_error">cloud error</string>
     <string name="status_quota_empty">quota empty</string>
     <string name="status_skipped_sensitive">🔒 secured</string>

@@ -12,11 +12,20 @@ object RimeContextJsonParser {
             val root = JSONObject(json)
             val composition = root.optString("composition", "")
             val candidates = parseCandidates(root.optJSONArray("candidates"))
+            val pageNumber = if (root.has("pageNumber")) {
+                root.optInt("pageNumber", 0)
+            } else {
+                root.optInt("pageNo", 0)
+            }
             RimeSessionState(
                 composition = composition,
                 compositionCursor = root.optInt("compositionCursor", composition.length),
                 candidates = candidates,
                 highlightedIndex = root.optInt("highlightedIndex", 0),
+                pageSize = root.optInt("pageSize", candidates.size),
+                pageNumber = pageNumber,
+                isLastPage = root.optBoolean("isLastPage", true),
+                selectKeys = root.optString("selectKeys", ""),
                 isComposing = root.optBoolean(
                     "isComposing",
                     composition.isNotEmpty() || candidates.isNotEmpty()

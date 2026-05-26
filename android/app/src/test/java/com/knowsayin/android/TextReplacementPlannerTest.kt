@@ -61,4 +61,80 @@ class TextReplacementPlannerTest {
         assertEquals("useful text", plan!!.textToClean)
         assertEquals(false, plan.isSelectedText)
     }
+
+    @Test
+    fun `plan captures full selected text snapshot for validation`() {
+        val snapshot = TextReplacementPlanner.InputSnapshot(
+            selectedText = "  clean this  ",
+            beforeCursorText = "prefix ",
+            afterCursorText = " suffix"
+        )
+
+        val plan = TextReplacementPlanner.planFromSnapshot(snapshot)
+
+        assertNotNull(plan)
+        assertEquals("clean this", plan!!.textToClean)
+        assertEquals(snapshot, plan.capturedSnapshot)
+        assertEquals(true, TextReplacementPlanner.snapshotMatchesPlan(plan, snapshot))
+    }
+
+    @Test
+    fun `snapshot validation rejects selected text changes`() {
+        val plan = TextReplacementPlanner.planFromSnapshot(
+            TextReplacementPlanner.InputSnapshot(
+                selectedText = "clean this",
+                beforeCursorText = "prefix ",
+                afterCursorText = " suffix"
+            )
+        )
+        assertNotNull(plan)
+
+        val changedSelection = TextReplacementPlanner.InputSnapshot(
+            selectedText = "other text",
+            beforeCursorText = "prefix ",
+            afterCursorText = " suffix"
+        )
+
+        assertEquals(false, TextReplacementPlanner.snapshotMatchesPlan(plan!!, changedSelection))
+    }
+
+    @Test
+    fun `snapshot validation rejects before cursor edits`() {
+        val plan = TextReplacementPlanner.planFromSnapshot(
+            TextReplacementPlanner.InputSnapshot(
+                selectedText = "",
+                beforeCursorText = "rough prompt",
+                afterCursorText = ""
+            )
+        )
+        assertNotNull(plan)
+
+        val editedBeforeCursor = TextReplacementPlanner.InputSnapshot(
+            selectedText = "",
+            beforeCursorText = "rough prompt plus typing",
+            afterCursorText = ""
+        )
+
+        assertEquals(false, TextReplacementPlanner.snapshotMatchesPlan(plan!!, editedBeforeCursor))
+    }
+
+    @Test
+    fun `snapshot validation rejects cursor moves that change after text`() {
+        val plan = TextReplacementPlanner.planFromSnapshot(
+            TextReplacementPlanner.InputSnapshot(
+                selectedText = "",
+                beforeCursorText = "rough prompt",
+                afterCursorText = " tail"
+            )
+        )
+        assertNotNull(plan)
+
+        val movedCursor = TextReplacementPlanner.InputSnapshot(
+            selectedText = "",
+            beforeCursorText = "rough prompt",
+            afterCursorText = ""
+        )
+
+        assertEquals(false, TextReplacementPlanner.snapshotMatchesPlan(plan!!, movedCursor))
+    }
 }

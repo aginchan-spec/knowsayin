@@ -73,6 +73,22 @@ class RimeAssetValidationTest {
     }
 
     @Test
+    fun `schema enables pinyin completion sentence composition and user learning`() {
+        val schemaText = File(assetDir, "knowsayin_pinyin.schema.yaml").readText()
+        val requiredOptions = listOf(
+            "enable_completion: true",
+            "enable_word_completion: true",
+            "enable_sentence: true",
+            "enable_user_dict: true"
+        )
+        val missing = requiredOptions.filterNot { schemaText.contains(it) }
+        assertTrue(
+            "Schema is missing real IME translator options: $missing",
+            missing.isEmpty()
+        )
+    }
+
+    @Test
     fun `schema uses schema_id knowsayin_pinyin`() {
         val schemaText = File(assetDir, "knowsayin_pinyin.schema.yaml").readText()
         assertTrue(
